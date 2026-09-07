@@ -1,0 +1,33 @@
+{
+  "name": "beholder",
+  "version": "0.1.0",
+  "description": "Local-first Windows time tracker",
+  "main": "./out/main/index.js",
+  "author": "Beholder",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "@koromix/koffi-win32-x64": "^3.2.1",
+    "koffi": "^3.2.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sql.js": "^1.14.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/sql.js": "^1.4.11",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^34.0.0",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0"
+  },
+  "allowScripts": {
+    "koffi@3.2.1": true
+  }
+}
