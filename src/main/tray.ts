@@ -1,24 +1,10 @@
-import { Menu, Tray, app, nativeImage } from 'electron'
+import { Menu, Tray, app } from 'electron'
+import { getTrayIcon } from './icon'
 import { hasManualTimer, isPaused, setPaused, snapshot, stopManualTimer } from './tracker'
 import { getMainWindow, setAllowQuit, showMainWindow } from './windows'
 import { loadConfig, updateConfig } from './store'
 
 let tray: Tray | null = null
-
-function createTrayIcon(): Electron.NativeImage {
-  const size = 16
-  const buf = Buffer.alloc(size * size * 4)
-  for (let i = 0; i < size * size; i++) {
-    const x = i % size
-    const y = Math.floor(i / size)
-    const on = x >= 4 && x <= 11 && y >= 4 && y <= 11
-    buf[i * 4] = on ? 214 : 0
-    buf[i * 4 + 1] = on ? 168 : 0
-    buf[i * 4 + 2] = on ? 75 : 0
-    buf[i * 4 + 3] = on ? 255 : 0
-  }
-  return nativeImage.createFromBuffer(buf, { width: size, height: size })
-}
 
 function openPage(page: 'dashboard' | 'timeline' | 'timer'): void {
   showMainWindow()
@@ -79,7 +65,7 @@ function safeSnapshot(): ReturnType<typeof snapshot> | null {
 
 export function createTray(): Tray {
   if (tray) return tray
-  tray = new Tray(createTrayIcon())
+  tray = new Tray(getTrayIcon())
   refreshTrayMenu()
   tray.on('double-click', () => openPage('dashboard'))
   return tray

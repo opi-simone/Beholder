@@ -168,9 +168,19 @@ export function getSession(id: number): Session | undefined {
   return row ? mapSession(row) : undefined
 }
 
-export function getLastSession(): (Session & { aggregationKey: string }) | undefined {
-  const row = get<SessionRow>(`${SESSION_SELECT} ORDER BY s.end_ms DESC LIMIT 1`)
+export function getLastSessionByKey(aggregationKey: string): (Session & { aggregationKey: string }) | undefined {
+  const row = get<SessionRow>(`${SESSION_SELECT} WHERE s.aggregation_key = ? ORDER BY s.end_ms DESC LIMIT 1`, [
+    aggregationKey
+  ])
   return row ? { ...mapSession(row), aggregationKey: row.aggregation_key } : undefined
+}
+
+export function pruneShortAutoSessions(minDurationMs: number, exceptId?: number): void {
+  if (exceptId) {
+    run('DELETE FROM sessions WHERE origin = ? AND duration_ms < ? AND id != ?', ['auto', minDurationMs, exceptId])
+  } else {
+    run('DELETE FROM sessions WHERE origin = ? AND duration_ms < ?', ['auto', minDurationMs])
+  }
 }
 
 export function listSessionsForDay(date: string): Session[] {

@@ -63,7 +63,9 @@ export default function App(): JSX.Element {
 
   return (
     <WindowShell title="Beholder" page={page} onPage={setPage}>
-      {page === 'dashboard' && <DashboardPage snap={snap} onOpenTimer={() => setTimerOpen(true)} />}
+      {page === 'dashboard' && (
+        <DashboardPage snap={snap} onOpenTimer={() => setTimerOpen(true)} onOpenTimeline={() => setPage('timeline')} />
+      )}
       {page === 'timeline' && <TimelinePage />}
       {page === 'settings' && <SettingsPage />}
       {timerOpen && <TimerForm onClose={() => setTimerOpen(false)} />}

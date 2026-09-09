@@ -33,6 +33,10 @@ import {
 } from './tracker'
 import { createMainWindow, isQuitAllowed, setAllowQuit, showMainWindow } from './windows'
 
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.beholder.app')
+}
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -99,20 +103,44 @@ function registerIpc(): void {
   ipcMain.handle('settings:get', () => ({
     pollIntervalMs: Number(setting('poll_interval_ms', '3000')),
     idleThresholdMs: Number(setting('idle_threshold_ms', '300000')),
+    minSessionMs: Number(setting('min_session_ms', '30000')),
+    switchDebounceMs: Number(setting('switch_debounce_ms', '15000')),
+    resumeGapMs: Number(setting('resume_gap_ms', '120000')),
     excludedProcesses: listExcluded()
   }))
-  ipcMain.handle('settings:update', (_e, patch: { pollIntervalMs?: number; idleThresholdMs?: number }) => {
-    if (patch.pollIntervalMs) {
-      const v = Math.min(15000, Math.max(1000, patch.pollIntervalMs))
-      setSetting('poll_interval_ms', String(v))
-      restartTrackerInterval()
+  ipcMain.handle(
+    'settings:update',
+    (
+      _e,
+      patch: {
+        pollIntervalMs?: number
+        idleThresholdMs?: number
+        minSessionMs?: number
+        switchDebounceMs?: number
+        resumeGapMs?: number
+      }
+    ) => {
+      if (patch.pollIntervalMs !== undefined) {
+        const v = Math.min(15000, Math.max(1000, patch.pollIntervalMs))
+        setSetting('poll_interval_ms', String(v))
+        restartTrackerInterval()
+      }
+      if (patch.idleThresholdMs !== undefined) {
+        const v = Math.min(60 * 60 * 1000, Math.max(60 * 1000, patch.idleThresholdMs))
+        setSetting('idle_threshold_ms', String(v))
+      }
+      if (patch.minSessionMs !== undefined) {
+        setSetting('min_session_ms', String(Math.min(300000, Math.max(5000, patch.minSessionMs))))
+      }
+      if (patch.switchDebounceMs !== undefined) {
+        setSetting('switch_debounce_ms', String(Math.min(60000, Math.max(3000, patch.switchDebounceMs))))
+      }
+      if (patch.resumeGapMs !== undefined) {
+        setSetting('resume_gap_ms', String(Math.min(15 * 60 * 1000, Math.max(30000, patch.resumeGapMs))))
+      }
+      broadcastChanged()
     }
-    if (patch.idleThresholdMs) {
-      const v = Math.min(60 * 60 * 1000, Math.max(60 * 1000, patch.idleThresholdMs))
-      setSetting('idle_threshold_ms', String(v))
-    }
-    broadcastChanged()
-  })
+  )
   ipcMain.handle('excluded:add', (_e, processName: string) => {
     addExcluded(processName)
     broadcastChanged()

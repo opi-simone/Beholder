@@ -65,6 +65,47 @@ export default function SettingsPage(): JSX.Element {
             }
           />
         </label>
+        <label>
+          Ignora sessioni più brevi di (secondi)
+          <input
+            type="number"
+            min={5}
+            max={300}
+            value={Math.round(settings.minSessionMs / 1000)}
+            onChange={(e) =>
+              void window.beholder.updateSettings({ minSessionMs: Number(e.target.value) * 1000 }).then(reload)
+            }
+          />
+        </label>
+        <label>
+          Attendi prima di cambiare contesto (secondi)
+          <input
+            type="number"
+            min={3}
+            max={60}
+            value={Math.round(settings.switchDebounceMs / 1000)}
+            onChange={(e) =>
+              void window.beholder
+                .updateSettings({ switchDebounceMs: Number(e.target.value) * 1000 })
+                .then(reload)
+            }
+          />
+        </label>
+        <label>
+          Ricongiungi lo stesso contesto se rientri entro (minuti)
+          <input
+            type="number"
+            min={1}
+            max={15}
+            value={Math.round(settings.resumeGapMs / 60000)}
+            onChange={(e) =>
+              void window.beholder.updateSettings({ resumeGapMs: Number(e.target.value) * 60000 }).then(reload)
+            }
+          />
+        </label>
+        <p className="muted">
+          Così i salti brevi da Cursor ad altre finestre non creano decine di blocchi da pochi secondi.
+        </p>
       </section>
       <section className="card wide">
         <h2>App escluse</h2>

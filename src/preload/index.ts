@@ -31,8 +31,13 @@ const api = {
     ipcRenderer.invoke('mappings:create', matchType, pattern, projectId),
   deleteMapping: (id: number): Promise<void> => ipcRenderer.invoke('mappings:delete', id),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
-  updateSettings: (patch: { pollIntervalMs?: number; idleThresholdMs?: number }): Promise<void> =>
-    ipcRenderer.invoke('settings:update', patch),
+  updateSettings: (patch: {
+    pollIntervalMs?: number
+    idleThresholdMs?: number
+    minSessionMs?: number
+    switchDebounceMs?: number
+    resumeGapMs?: number
+  }): Promise<void> => ipcRenderer.invoke('settings:update', patch),
   addExcluded: (processName: string): Promise<void> => ipcRenderer.invoke('excluded:add', processName),
   removeExcluded: (processName: string): Promise<void> => ipcRenderer.invoke('excluded:remove', processName),
   startTimer: (payload: StartTimerPayload): Promise<AppSnapshot> => ipcRenderer.invoke('timer:start', payload),

@@ -7,11 +7,13 @@ import {
   assignSession,
   countIdleUnreviewed,
   createMapping,
+  deleteSession,
   extendSession,
-  getLastSession,
+  getLastSessionByKey,
   getSession,
   insertSession,
-  isExcluded
+  isExcluded,
+  pruneShortAutoSessions
 } from './queries'
 import { loadConfig } from './store'
 import { getActiveWindow, getIdleMs } from './win32'
@@ -24,6 +26,7 @@ type OpenSession = {
 
 let timer: ReturnType<typeof setInterval> | null = null
 let open: OpenSession | null = null
+let pendingSwitch: { key: string; since: number } | null = null
 let wasIdle = false
 let lastBroadcast = 0
 
@@ -48,23 +51,67 @@ function idleMs(): number {
   return Number(setting('idle_threshold_ms', '300000')) || 300000
 }
 
-function closeOpen(at: number): void {
+function minSessionMs(): number {
+  return Number(setting('min_session_ms', '30000')) || 30000
+}
+
+function switchDebounceMs(): number {
+  return Number(setting('switch_debounce_ms', '15000')) || 15000
+}
+
+function resumeGapMs(): number {
+  return Number(setting('resume_gap_ms', '120000')) || 120000
+}
+
+function closeOpen(at?: number): void {
   if (!open) return
-  extendSession(open.id, at)
+  const closing = open
+  if (at !== undefined) extendSession(closing.id, at)
   open = null
+  pendingSwitch = null
+  if (closing.kind !== 'auto') return
+  const session = getSession(closing.id)
+  if (session && session.durationMs < minSessionMs()) {
+    deleteSession(closing.id)
+  }
 }
 
 function resumeIfCompatible(key: string, kind: OpenSession['kind'], now: number): boolean {
-  const last = getLastSession()
+  const last = getLastSessionByKey(key)
   if (!last || last.origin === 'manual_timer') return false
   if (kind === 'auto' && last.origin !== 'auto') return false
   if (kind === 'idle' && last.origin !== 'idle_detection') return false
-  const lastKey = (last as { aggregationKey?: string }).aggregationKey
-  if (lastKey !== key) return false
-  if (now - last.endMs > pollMs() * 2 + 1000) return false
+  if (last.aggregationKey !== key) return false
+  if (now - last.endMs > resumeGapMs()) return false
   open = { id: last.id, key, kind }
   extendSession(last.id, now)
   return true
+}
+
+function beginAutoSession(
+  now: number,
+  key: string,
+  processName: string,
+  windowTitle: string,
+  classified: ReturnType<typeof classifyWindow>
+): void {
+  if (resumeIfCompatible(key, 'auto', now)) {
+    if (open) extendSession(open.id, now, windowTitle)
+    return
+  }
+  const id = insertSession({
+    startMs: now,
+    endMs: now,
+    processName,
+    windowTitle,
+    repoSlug: classified.repoSlug,
+    projectId: classified.projectId,
+    activityLabel: null,
+    origin: 'auto',
+    classificationSource: classified.source,
+    aggregationKey: key
+  })
+  open = { id, key, kind: 'auto' }
 }
 
 function tick(): void {
@@ -79,7 +126,8 @@ function tick(): void {
   }
 
   if (paused) {
-    closeOpen(now)
+    closeOpen()
+    pendingSwitch = null
     contextLabel = 'Tracking in pausa'
     maybeBroadcast(now)
     return
@@ -87,12 +135,14 @@ function tick(): void {
 
   const idleFor = getIdleMs()
   if (idleFor >= idleMs()) {
+    const lastInput = now - idleFor
     const key = 'idle'
     if (!open || open.key !== key) {
-      closeOpen(now)
+      closeOpen(lastInput)
+      pendingSwitch = null
       if (!resumeIfCompatible(key, 'idle', now)) {
         const id = insertSession({
-          startMs: now,
+          startMs: lastInput,
           endMs: now,
           processName: 'Idle',
           windowTitle: 'Inattività',
@@ -123,7 +173,17 @@ function tick(): void {
 
   const win = getActiveWindow()
   if (!win || isExcluded(win.processName)) {
-    closeOpen(now)
+    if (open?.kind === 'auto') {
+      if (!pendingSwitch || pendingSwitch.key !== 'excluded') {
+        pendingSwitch = { key: 'excluded', since: now }
+      }
+      if (now - pendingSwitch.since < switchDebounceMs()) {
+        contextLabel = 'Escluso / nessuna finestra'
+        maybeBroadcast(now)
+        return
+      }
+    }
+    closeOpen()
     contextLabel = 'Escluso / nessuna finestra'
     maybeBroadcast(now)
     return
@@ -141,26 +201,23 @@ function tick(): void {
   }
 
   if (open && open.key === key && open.kind === 'auto') {
+    pendingSwitch = null
     extendSession(open.id, now, win.windowTitle)
-  } else {
-    closeOpen(now)
-    if (!resumeIfCompatible(key, 'auto', now)) {
-      const id = insertSession({
-        startMs: now,
-        endMs: now,
-        processName: win.processName,
-        windowTitle: win.windowTitle,
-        repoSlug: classified.repoSlug,
-        projectId: classified.projectId,
-        activityLabel: null,
-        origin: 'auto',
-        classificationSource: classified.source,
-        aggregationKey: key
-      })
-      open = { id, key, kind: 'auto' }
-    } else {
-      extendSession(open.id, now, win.windowTitle)
+  } else if (open && open.kind === 'auto' && open.key !== key) {
+    if (!pendingSwitch || pendingSwitch.key !== key) {
+      pendingSwitch = { key, since: now }
     }
+    if (now - pendingSwitch.since < switchDebounceMs()) {
+        contextLabel = `${win.processName} — ${classified.repoSlug ?? (win.windowTitle || '…')}`
+      maybeBroadcast(now)
+      return
+    }
+    const startedAt = pendingSwitch.since
+    closeOpen()
+    beginAutoSession(startedAt, key, win.processName, win.windowTitle, classified)
+  } else {
+    pendingSwitch = null
+    beginAutoSession(now, key, win.processName, win.windowTitle, classified)
   }
 
   const projectBit = classified.repoSlug ?? (win.windowTitle || 'Non classificato')
@@ -202,7 +259,7 @@ export function snapshot(): AppSnapshot {
 
 export function setPaused(value: boolean): void {
   paused = value
-  if (value && !manual) closeOpen(Date.now())
+  if (value && !manual) closeOpen()
   broadcastChanged()
 }
 
@@ -277,6 +334,7 @@ export function rememberAssignment(sessionId: number, projectId: number): void {
 export function startTracker(initialPaused: boolean): void {
   paused = initialPaused
   recoverInterruptedTimer()
+  pruneShortAutoSessions(minSessionMs())
   if (timer) clearInterval(timer)
   tick()
   timer = setInterval(tick, pollMs())

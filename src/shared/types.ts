@@ -62,6 +62,9 @@ export type DashboardDay = {
 export type AppSettings = {
   pollIntervalMs: number
   idleThresholdMs: number
+  minSessionMs: number
+  switchDebounceMs: number
+  resumeGapMs: number
   excludedProcesses: string[]
 }
 

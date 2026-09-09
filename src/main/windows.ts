@@ -1,5 +1,6 @@
 import { BrowserWindow, app } from 'electron'
 import { join } from 'node:path'
+import { getWindowIconPath } from './icon'
 
 function preloadPath(): string {
   return join(__dirname, '../preload/index.js')
@@ -37,8 +38,9 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 480,
     show: false,
     frame: false,
-    backgroundColor: '#0F0F0D',
+    backgroundColor: '#030A12',
     title: 'Beholder',
+    icon: getWindowIconPath(),
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,
@@ -46,6 +48,10 @@ export function createMainWindow(): BrowserWindow {
       sandbox: false
     }
   })
+
+  if (process.platform === 'win32') {
+    mainWin.setIcon(getWindowIconPath())
+  }
 
   mainWin.loadURL(pageUrl())
   mainWin.once('ready-to-show', () => {

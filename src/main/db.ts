@@ -82,6 +82,9 @@ export async function openDatabase(): Promise<void> {
   }
   db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('poll_interval_ms', '3000')`)
   db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('idle_threshold_ms', '300000')`)
+  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('min_session_ms', '30000')`)
+  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('switch_debounce_ms', '15000')`)
+  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('resume_gap_ms', '120000')`)
   persistNow()
 }
 

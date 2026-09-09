@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
+import { sessionGroupLabel } from '../../../shared/grouping'
 import type { Project, Session } from '../../../shared/types'
-import { datetimeLocalValue, formatClock, formatDuration, shiftDate, todayDate } from '../../../shared/time'
+import { datetimeLocalValue, dayBounds, formatClock, formatDuration, shiftDate, todayDate } from '../../../shared/time'
+
+type TimelineTab = 'cronologia' | 'riepilogo'
+
+function clipDuration(session: Session, date: string): number {
+  const { start, end } = dayBounds(date)
+  return Math.max(0, Math.min(session.endMs, end) - Math.max(session.startMs, start))
+}
 
 export default function TimelinePage(): JSX.Element {
   const [date, setDate] = useState(todayDate())
+  const [tab, setTab] = useState<TimelineTab>('cronologia')
+  const [filterLabel, setFilterLabel] = useState<string | null>(null)
   const [sessions, setSessions] = useState<Session[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [error, setError] = useState('')
@@ -16,11 +26,29 @@ export default function TimelinePage(): JSX.Element {
   }
 
   useEffect(() => {
+    setFilterLabel(null)
     void reload()
     return window.beholder.onChanged(() => {
       void reload()
     })
   }, [date])
+
+  const groups = [
+    ...sessions
+      .reduce((map, session) => {
+        const label = sessionGroupLabel(session)
+        const cur = map.get(label) ?? { label, ms: 0, count: 0 }
+        cur.ms += clipDuration(session, date)
+        cur.count += 1
+        map.set(label, cur)
+        return map
+      }, new Map<string, { label: string; ms: number; count: number }>())
+      .values()
+  ].sort((a, b) => b.ms - a.ms)
+
+  const visible = filterLabel
+    ? sessions.filter((session) => sessionGroupLabel(session) === filterLabel)
+    : sessions
 
   return (
     <>
@@ -41,20 +69,78 @@ export default function TimelinePage(): JSX.Element {
           </button>
         </div>
       </section>
-      {error && <p className="banner danger">{error}</p>}
-      <div className="timeline">
-        {sessions.length === 0 && <p className="muted">Nessuna sessione in questo giorno.</p>}
-        {sessions.map((session, index) => (
-          <SessionRow
-            key={session.id}
-            session={session}
-            previous={sessions[index - 1]}
-            projects={projects}
-            onError={setError}
-            onProjects={setProjects}
-          />
-        ))}
+      <div className="subnav">
+        <button
+          type="button"
+          className={tab === 'cronologia' ? 'nav-btn active' : 'nav-btn'}
+          onClick={() => setTab('cronologia')}
+        >
+          Cronologia
+        </button>
+        <button
+          type="button"
+          className={tab === 'riepilogo' ? 'nav-btn active' : 'nav-btn'}
+          onClick={() => {
+            setTab('riepilogo')
+            setFilterLabel(null)
+          }}
+        >
+          Riepilogo
+        </button>
       </div>
+      {error && <p className="banner danger">{error}</p>}
+      {tab === 'riepilogo' ? (
+        <div className="timeline">
+          {groups.length === 0 && <p className="muted">Nessuna sessione in questo giorno.</p>}
+          {groups.map((group) => (
+            <button
+              type="button"
+              key={group.label}
+              className="group-row"
+              onClick={() => {
+                setFilterLabel(group.label)
+                setTab('cronologia')
+              }}
+            >
+              <span>
+                <strong>{group.label}</strong>
+                <span className="muted">
+                  {' '}
+                  · {group.count} {group.count === 1 ? 'blocco' : 'blocchi'}
+                </span>
+              </span>
+              <strong>{formatDuration(group.ms)}</strong>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="timeline">
+          {filterLabel && (
+            <p className="banner">
+              Filtro: {filterLabel}{' '}
+              <button type="button" className="btn-ghost" onClick={() => setFilterLabel(null)}>
+                Mostra tutti
+              </button>
+            </p>
+          )}
+          {visible.length === 0 && <p className="muted">Nessuna sessione in questo giorno.</p>}
+          {visible.map((session) => {
+            const fullIndex = sessions.findIndex((item) => item.id === session.id)
+            const previous = fullIndex > 0 ? sessions[fullIndex - 1] : undefined
+            return (
+              <SessionRow
+                key={session.id}
+                session={session}
+                previous={previous}
+                projects={projects}
+                highlight={Boolean(filterLabel)}
+                onError={setError}
+                onProjects={setProjects}
+              />
+            )
+          })}
+        </div>
+      )}
     </>
   )
 }
@@ -63,12 +149,14 @@ function SessionRow({
   session,
   previous,
   projects,
+  highlight,
   onError,
   onProjects
 }: {
   session: Session
   previous?: Session
   projects: Project[]
+  highlight?: boolean
   onError: (msg: string) => void
   onProjects: (projects: Project[]) => void
 }): JSX.Element {
@@ -97,7 +185,7 @@ function SessionRow({
   }
 
   return (
-    <article className="session">
+    <article className={highlight ? 'session highlight' : 'session'}>
       <header>
         <strong>
           {formatClock(session.startMs)} – {formatClock(session.endMs)} · {formatDuration(session.durationMs)}
@@ -144,8 +232,7 @@ function SessionRow({
           className="btn-ghost"
           onClick={() =>
             void run(async () => {
-              let pid = projectId ? Number(projectId) : null
-              if (!pid && projectId === 'new') return
+              const pid = projectId ? Number(projectId) : null
               await window.beholder.assignSession({
                 sessionId: session.id,
                 projectId: pid,

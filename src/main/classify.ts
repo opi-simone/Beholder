@@ -1,3 +1,4 @@
+import { basename } from 'node:path'
 import type { ClassificationSource, MatchType } from '../shared/types'
 import { all } from './db'
 
@@ -21,19 +22,44 @@ type MappingRow = {
   priority: number
 }
 
+function looksLikeFileName(part: string): boolean {
+  if (/^[a-zA-Z]:[\\/]/.test(part) || part.startsWith('\\\\') || part.startsWith('/')) return false
+  return /\.\w{1,10}$/.test(part)
+}
+
+function looksLikePath(part: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(part) || part.startsWith('\\\\') || part.includes('/') || part.includes('\\')
+}
+
+function cleanSegment(part: string): string {
+  return part
+    .replace(/\s*\(Workspace\)\s*$/i, '')
+    .replace(/\s*\[SSH:[^\]]*\]\s*$/i, '')
+    .trim()
+}
+
 export function extractCursorRepo(title: string): string | null {
-  const cleaned = title.replace(/\s*[-—–]\s*Cursor(\s+.*)?$/i, '').trim()
+  let cleaned = title.replace(/^[●■◦]\s*/, '').replace(/\s*[●*]+$/, '').trim()
+  cleaned = cleaned.replace(/\s*[-—–]\s*(Cursor|Visual Studio Code|Code - OSS|Code)(\s+.*)?$/i, '').trim()
   if (!cleaned) return null
+
   const parts = cleaned
-    .split(/\s*[-—–]\s*/)
-    .map((p) => p.trim())
+    .split(/\s*[-—–•]\s*/)
+    .map((p) => cleanSegment(p))
     .filter(Boolean)
-  if (parts.length === 0) return null
-  const last = parts[parts.length - 1]
-  if (/\.\w{1,8}$/.test(last) && parts.length >= 2) {
-    return parts[parts.length - 2]
+
+  const folders = parts.filter((part) => !looksLikeFileName(part))
+  if (folders.length === 0) return null
+
+  const pathPart = folders.find((part) => looksLikePath(part))
+  if (pathPart) {
+    const base = basename(pathPart.replace(/[\\/]+$/, ''))
+    return base || pathPart
   }
-  return last
+
+  // VS Code/Cursor: file - workspace - profile - app
+  // The workspace is the first non-file segment; the last extra is usually the profile (e.g. Mundayco).
+  return folders[0]
 }
 
 export function isCursorProcess(processName: string): boolean {
