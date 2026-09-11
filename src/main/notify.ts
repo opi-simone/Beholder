@@ -21,7 +21,7 @@ export function notifyIdleReturn(durationLabel: string): void {
   if (!Notification.isSupported()) return
   new Notification({
     title: 'Beholder',
-    body: `Rilevata inattività (${durationLabel}). Revisiona il periodo in timeline.`
+    body: `Rilevata inattività (${durationLabel}). Il tempo AFK non è stato contato.`
   }).show()
 }
 

@@ -1,30 +1,24 @@
 import { BrowserWindow, Menu, app, ipcMain } from 'electron'
-import type { AssignPayload, MatchType, StartTimerPayload } from '../shared/types'
+import type { AssignPayload, RuleType, StartTimerPayload } from '../shared/types'
+import { defaultWeight } from './classification-weights'
 import { openDatabase, persistNow, setSetting, setting } from './db'
 import { broadcastChanged } from './notify'
 import {
   addExcluded,
-  assignSession,
-  createMapping,
   createProject,
-  dashboardForDay,
-  deleteMapping,
-  deleteSession,
   listExcluded,
-  listMappings,
   listProjects,
   listSessionsForDay,
-  mergeSessions,
-  removeExcluded,
-  splitSession,
-  updateSessionTimes
+  removeExcluded
 } from './queries'
 import { loadConfig, updateConfig } from './store'
 import { createTray, getTray } from './tray'
 import {
+  clearProjectLock,
   rememberAssignment,
   restartTrackerInterval,
   setPaused,
+  setProjectLock,
   snapshot,
   startManualTimer,
   startTracker,
@@ -32,6 +26,22 @@ import {
   stopTracker
 } from './tracker'
 import { createMainWindow, isQuitAllowed, setAllowQuit, showMainWindow } from './windows'
+import {
+  assignUnknown,
+  assignWorkSession,
+  createProjectRule,
+  deleteProjectRule,
+  deleteWorkSession,
+  listActivityEventsForDay,
+  listProjectRuleViews,
+  listUnknownForDay,
+  listWorkSessionsForDay,
+  loadEngineSettings,
+  mergeWorkSessions,
+  splitWorkSession,
+  updateWorkSessionTimes,
+  workDashboardForDay
+} from './work-queries'
 
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.beholder.app')
@@ -58,56 +68,75 @@ function registerIpc(): void {
     updateConfig({ trackingPaused: paused })
     return snapshot()
   })
-  ipcMain.handle('dashboard:get', (_e, date: string) => dashboardForDay(date))
-  ipcMain.handle('sessions:list', (_e, date: string) => listSessionsForDay(date))
+  ipcMain.handle('dashboard:get', (_e, date: string) => workDashboardForDay(date))
+  ipcMain.handle('sessions:list', (_e, date: string) => listWorkSessionsForDay(date))
   ipcMain.handle('sessions:updateTimes', (_e, id: number, startMs: number, endMs: number) => {
-    updateSessionTimes(id, startMs, endMs)
+    updateWorkSessionTimes(id, startMs, endMs)
     broadcastChanged()
   })
   ipcMain.handle('sessions:delete', (_e, id: number) => {
-    deleteSession(id)
+    deleteWorkSession(id)
     broadcastChanged()
   })
   ipcMain.handle('sessions:split', (_e, id: number, atMs: number) => {
-    splitSession(id, atMs)
+    splitWorkSession(id, atMs)
     broadcastChanged()
   })
   ipcMain.handle('sessions:merge', (_e, firstId: number, secondId: number) => {
-    mergeSessions(firstId, secondId)
+    mergeWorkSessions(firstId, secondId)
     broadcastChanged()
   })
   ipcMain.handle('sessions:assign', (_e, payload: AssignPayload) => {
+    assignWorkSession(payload.sessionId, payload.projectId, payload.activityLabel ?? null)
     if (payload.remember && payload.projectId) {
       rememberAssignment(payload.sessionId, payload.projectId)
-    } else {
-      assignSession(
-        payload.sessionId,
-        payload.projectId,
-        payload.activityLabel ?? null,
-        payload.projectId ? 'user_rule' : 'unclassified'
-      )
     }
+    broadcastChanged()
+  })
+  ipcMain.handle('legacy:list', (_e, date: string) => listSessionsForDay(date))
+  ipcMain.handle('events:list', (_e, date: string) => listActivityEventsForDay(date))
+  ipcMain.handle('unknown:list', (_e, date: string) => listUnknownForDay(date))
+  ipcMain.handle('unknown:assign', (_e, id: number, projectId: number, activityLabel: string | null) => {
+    assignUnknown(id, projectId, activityLabel)
     broadcastChanged()
   })
   ipcMain.handle('projects:list', () => listProjects())
   ipcMain.handle('projects:create', (_e, name: string) => createProject(name))
-  ipcMain.handle('mappings:list', () => listMappings())
-  ipcMain.handle('mappings:create', (_e, matchType: MatchType, pattern: string, projectId: number) => {
-    createMapping(matchType, pattern, projectId, 10)
+  ipcMain.handle('rules:list', () => listProjectRuleViews())
+  ipcMain.handle('rules:create', (_e, ruleType: RuleType, ruleValue: string, projectId: number, weight?: number) => {
+    createProjectRule(ruleType, ruleValue, projectId, weight ?? defaultWeight(ruleType))
     broadcastChanged()
   })
-  ipcMain.handle('mappings:delete', (_e, id: number) => {
-    deleteMapping(id)
+  ipcMain.handle('rules:delete', (_e, id: number) => {
+    deleteProjectRule(id)
     broadcastChanged()
   })
-  ipcMain.handle('settings:get', () => ({
-    pollIntervalMs: Number(setting('poll_interval_ms', '3000')),
-    idleThresholdMs: Number(setting('idle_threshold_ms', '300000')),
-    minSessionMs: Number(setting('min_session_ms', '30000')),
-    switchDebounceMs: Number(setting('switch_debounce_ms', '15000')),
-    resumeGapMs: Number(setting('resume_gap_ms', '120000')),
-    excludedProcesses: listExcluded()
-  }))
+  ipcMain.handle('lock:set', (_e, projectId: number) => {
+    setProjectLock(projectId)
+    return snapshot()
+  })
+  ipcMain.handle('lock:clear', () => {
+    clearProjectLock()
+    return snapshot()
+  })
+  ipcMain.handle('settings:get', () => {
+    const engine = loadEngineSettings()
+    return {
+      pollIntervalMs: Number(setting('poll_interval_ms', '2000')),
+      idleThresholdMs: engine.idleThresholdMs,
+      startThreshold: engine.startThreshold,
+      switchThreshold: engine.switchThreshold,
+      highConfidence: engine.highConfidence,
+      mediumConfidence: engine.mediumConfidence,
+      switchDelayHighSec: engine.switchDelayHighSec,
+      switchDelayMediumSec: engine.switchDelayMediumSec,
+      switchDelayLowSec: engine.switchDelayLowSec,
+      maxGapFillSec: Math.round(engine.maxGapFillMs / 1000),
+      lockTimeoutMin: Math.round(engine.lockTimeoutMs / 60000),
+      confidenceDecay: engine.confidenceDecay,
+      excludedProcesses: listExcluded()
+    }
+  })
   ipcMain.handle(
     'settings:update',
     (
@@ -115,9 +144,16 @@ function registerIpc(): void {
       patch: {
         pollIntervalMs?: number
         idleThresholdMs?: number
-        minSessionMs?: number
-        switchDebounceMs?: number
-        resumeGapMs?: number
+        startThreshold?: number
+        switchThreshold?: number
+        highConfidence?: number
+        mediumConfidence?: number
+        switchDelayHighSec?: number
+        switchDelayMediumSec?: number
+        switchDelayLowSec?: number
+        maxGapFillSec?: number
+        lockTimeoutMin?: number
+        confidenceDecay?: number
       }
     ) => {
       if (patch.pollIntervalMs !== undefined) {
@@ -129,14 +165,35 @@ function registerIpc(): void {
         const v = Math.min(60 * 60 * 1000, Math.max(60 * 1000, patch.idleThresholdMs))
         setSetting('idle_threshold_ms', String(v))
       }
-      if (patch.minSessionMs !== undefined) {
-        setSetting('min_session_ms', String(Math.min(300000, Math.max(5000, patch.minSessionMs))))
+      if (patch.startThreshold !== undefined) {
+        setSetting('start_threshold', String(Math.min(100, Math.max(0, patch.startThreshold))))
       }
-      if (patch.switchDebounceMs !== undefined) {
-        setSetting('switch_debounce_ms', String(Math.min(60000, Math.max(3000, patch.switchDebounceMs))))
+      if (patch.switchThreshold !== undefined) {
+        setSetting('switch_threshold', String(Math.min(100, Math.max(0, patch.switchThreshold))))
       }
-      if (patch.resumeGapMs !== undefined) {
-        setSetting('resume_gap_ms', String(Math.min(15 * 60 * 1000, Math.max(30000, patch.resumeGapMs))))
+      if (patch.highConfidence !== undefined) {
+        setSetting('high_confidence', String(Math.min(100, Math.max(0, patch.highConfidence))))
+      }
+      if (patch.mediumConfidence !== undefined) {
+        setSetting('medium_confidence', String(Math.min(100, Math.max(0, patch.mediumConfidence))))
+      }
+      if (patch.switchDelayHighSec !== undefined) {
+        setSetting('switch_delay_high_sec', String(Math.min(600, Math.max(5, patch.switchDelayHighSec))))
+      }
+      if (patch.switchDelayMediumSec !== undefined) {
+        setSetting('switch_delay_medium_sec', String(Math.min(600, Math.max(5, patch.switchDelayMediumSec))))
+      }
+      if (patch.switchDelayLowSec !== undefined) {
+        setSetting('switch_delay_low_sec', String(Math.min(600, Math.max(5, patch.switchDelayLowSec))))
+      }
+      if (patch.maxGapFillSec !== undefined) {
+        setSetting('max_gap_fill_ms', String(Math.min(3600, Math.max(0, patch.maxGapFillSec)) * 1000))
+      }
+      if (patch.lockTimeoutMin !== undefined) {
+        setSetting('lock_timeout_ms', String(Math.min(480, Math.max(0, patch.lockTimeoutMin)) * 60000))
+      }
+      if (patch.confidenceDecay !== undefined) {
+        setSetting('confidence_decay', String(Math.min(50, Math.max(0, patch.confidenceDecay))))
       }
       broadcastChanged()
     }

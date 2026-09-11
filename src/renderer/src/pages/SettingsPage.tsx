@@ -1,26 +1,36 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
-import type { AppSettings, Mapping, MatchType, Project } from '../../../shared/types'
+import type { AppSettings, Project, ProjectRuleView, RuleType } from '../../../shared/types'
+
+const RULE_TYPES: { value: RuleType; label: string }[] = [
+  { value: 'repository', label: 'Repository' },
+  { value: 'folder', label: 'Cartella' },
+  { value: 'domain', label: 'Dominio' },
+  { value: 'keyword', label: 'Parola chiave' },
+  { value: 'window_title', label: 'Titolo finestra' },
+  { value: 'working_directory', label: 'Working directory' },
+  { value: 'process', label: 'Processo' }
+]
 
 export default function SettingsPage(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
-  const [mappings, setMappings] = useState<Mapping[]>([])
+  const [rules, setRules] = useState<ProjectRuleView[]>([])
   const [excluded, setExcluded] = useState('')
   const [projectName, setProjectName] = useState('')
-  const [matchType, setMatchType] = useState<MatchType>('repo')
+  const [ruleType, setRuleType] = useState<RuleType>('repository')
   const [pattern, setPattern] = useState('')
   const [mapProject, setMapProject] = useState('')
 
   async function reload(): Promise<void> {
-    const [s, p, m] = await Promise.all([
+    const [s, p, r] = await Promise.all([
       window.beholder.getSettings(),
       window.beholder.listProjects(),
-      window.beholder.listMappings()
+      window.beholder.listRules()
     ])
     setSettings(s)
     setProjects(p)
-    setMappings(m)
+    setRules(r)
   }
 
   useEffect(() => {
@@ -29,14 +39,18 @@ export default function SettingsPage(): JSX.Element {
 
   if (!settings) return <p className="muted">Caricamento…</p>
 
+  function patch(next: Partial<AppSettings>): void {
+    void window.beholder.updateSettings(next).then(reload)
+  }
+
   return (
     <>
       <section className="hero">
         <p className="eyebrow">Impostazioni</p>
-        <h1>Tracking locale</h1>
+        <h1>Tracking per progetto</h1>
       </section>
       <section className="card wide">
-        <h2>Intervalli</h2>
+        <h2>Algoritmo</h2>
         <label>
           Campionamento (secondi)
           <input
@@ -44,67 +58,102 @@ export default function SettingsPage(): JSX.Element {
             min={1}
             max={15}
             value={Math.round(settings.pollIntervalMs / 1000)}
-            onChange={(e) =>
-              void window.beholder
-                .updateSettings({ pollIntervalMs: Number(e.target.value) * 1000 })
-                .then(reload)
-            }
+            onChange={(e) => patch({ pollIntervalMs: Number(e.target.value) * 1000 })}
           />
         </label>
         <label>
-          Soglia idle (minuti)
+          Soglia AFK (minuti)
           <input
             type="number"
             min={1}
             max={60}
             value={Math.round(settings.idleThresholdMs / 60000)}
-            onChange={(e) =>
-              void window.beholder
-                .updateSettings({ idleThresholdMs: Number(e.target.value) * 60000 })
-                .then(reload)
-            }
+            onChange={(e) => patch({ idleThresholdMs: Number(e.target.value) * 60000 })}
           />
         </label>
         <label>
-          Ignora sessioni più brevi di (secondi)
+          Soglia avvio sessione
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={settings.startThreshold}
+            onChange={(e) => patch({ startThreshold: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Soglia cambio progetto
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={settings.switchThreshold}
+            onChange={(e) => patch({ switchThreshold: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Delay switch alta confidenza (s)
           <input
             type="number"
             min={5}
-            max={300}
-            value={Math.round(settings.minSessionMs / 1000)}
-            onChange={(e) =>
-              void window.beholder.updateSettings({ minSessionMs: Number(e.target.value) * 1000 }).then(reload)
-            }
+            max={600}
+            value={settings.switchDelayHighSec}
+            onChange={(e) => patch({ switchDelayHighSec: Number(e.target.value) })}
           />
         </label>
         <label>
-          Attendi prima di cambiare contesto (secondi)
+          Delay switch media confidenza (s)
           <input
             type="number"
-            min={3}
-            max={60}
-            value={Math.round(settings.switchDebounceMs / 1000)}
-            onChange={(e) =>
-              void window.beholder
-                .updateSettings({ switchDebounceMs: Number(e.target.value) * 1000 })
-                .then(reload)
-            }
+            min={5}
+            max={600}
+            value={settings.switchDelayMediumSec}
+            onChange={(e) => patch({ switchDelayMediumSec: Number(e.target.value) })}
           />
         </label>
         <label>
-          Ricongiungi lo stesso contesto se rientri entro (minuti)
+          Delay switch bassa confidenza (s)
           <input
             type="number"
-            min={1}
-            max={15}
-            value={Math.round(settings.resumeGapMs / 60000)}
-            onChange={(e) =>
-              void window.beholder.updateSettings({ resumeGapMs: Number(e.target.value) * 60000 }).then(reload)
-            }
+            min={5}
+            max={600}
+            value={settings.switchDelayLowSec}
+            onChange={(e) => patch({ switchDelayLowSec: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Gap filling max (secondi)
+          <input
+            type="number"
+            min={0}
+            max={3600}
+            value={settings.maxGapFillSec}
+            onChange={(e) => patch({ maxGapFillSec: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Timeout lock (minuti, 0 = solo manuale/AFK)
+          <input
+            type="number"
+            min={0}
+            max={480}
+            value={settings.lockTimeoutMin}
+            onChange={(e) => patch({ lockTimeoutMin: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Decay confidenza (punti per evento)
+          <input
+            type="number"
+            min={0}
+            max={50}
+            value={settings.confidenceDecay}
+            onChange={(e) => patch({ confidenceDecay: Number(e.target.value) })}
           />
         </label>
         <p className="muted">
-          Così i salti brevi da Cursor ad altre finestre non creano decine di blocchi da pochi secondi.
+          Il timesheet è la sessione di lavoro su un progetto, non il cambio finestra. Le app escluse non vengono
+          salvate; ChatGPT e siti generici restano sul progetto corrente.
         </p>
       </section>
       <section className="card wide">
@@ -162,24 +211,26 @@ export default function SettingsPage(): JSX.Element {
         </ul>
       </section>
       <section className="card wide">
-        <h2>Associazioni</h2>
+        <h2>Regole di riconoscimento</h2>
         <form
           className="inline wrap"
           onSubmit={(e) => {
             e.preventDefault()
             if (!pattern.trim() || !mapProject) return
-            void window.beholder.createMapping(matchType, pattern, Number(mapProject)).then(() => {
+            void window.beholder.createRule(ruleType, pattern, Number(mapProject), ruleType === 'process' ? 50 : undefined).then(() => {
               setPattern('')
               void reload()
             })
           }}
         >
-          <select value={matchType} onChange={(e) => setMatchType(e.target.value as MatchType)}>
-            <option value="repo">Repository</option>
-            <option value="process">Processo</option>
-            <option value="title_contains">Titolo contiene</option>
+          <select value={ruleType} onChange={(e) => setRuleType(e.target.value as RuleType)}>
+            {RULE_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
           </select>
-          <input placeholder="pattern" value={pattern} onChange={(e) => setPattern(e.target.value)} />
+          <input placeholder="valore regola" value={pattern} onChange={(e) => setPattern(e.target.value)} />
           <select value={mapProject} onChange={(e) => setMapProject(e.target.value)}>
             <option value="">Progetto</option>
             {projects.map((p) => (
@@ -193,12 +244,12 @@ export default function SettingsPage(): JSX.Element {
           </button>
         </form>
         <ul className="plain-list">
-          {mappings.map((m) => (
+          {rules.map((m) => (
             <li key={m.id}>
               <span>
-                {m.matchType}: {m.pattern} → {m.projectName}
+                {m.ruleType} ({m.weight}): {m.ruleValue} → {m.projectName}
               </span>
-              <button type="button" className="btn-ghost" onClick={() => void window.beholder.deleteMapping(m.id).then(reload)}>
+              <button type="button" className="btn-ghost" onClick={() => void window.beholder.deleteRule(m.id).then(reload)}>
                 Elimina
               </button>
             </li>

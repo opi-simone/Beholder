@@ -1,37 +1,48 @@
 import { formatDuration, todayDate } from '../shared/time'
 import type { AppSnapshot, StartTimerPayload, TrackingStatus } from '../shared/types'
-import { classifyWindow } from './classify'
+import { classifyActivity } from '../core/classifier'
+import { DEFAULT_SETTINGS } from '../core/defaults'
+import {
+  initialEngineState,
+  onActivity,
+  onMidnightSplit,
+  onPause,
+  setHold
+} from '../core/engine'
+import type { EngineEffect, EngineState, ProjectHold } from '../core/types'
 import { persistNow, setSetting, setting } from './db'
 import { broadcastChanged, notifyIdleReturn, notifyTimerInterrupted } from './notify'
-import {
-  assignSession,
-  countIdleUnreviewed,
-  createMapping,
-  deleteSession,
-  extendSession,
-  getLastSessionByKey,
-  getSession,
-  insertSession,
-  isExcluded,
-  pruneShortAutoSessions
-} from './queries'
-import { loadConfig } from './store'
+import { isExcluded, listProjects } from './queries'
+import { enrichWindow } from './tracking/enrich'
 import { getActiveWindow, getIdleMs } from './win32'
-
-type OpenSession = {
-  id: number
-  key: string
-  kind: 'auto' | 'idle' | 'manual'
-}
+import {
+  closeAnyOpenWorkSessions,
+  closeUnknownActivity,
+  closeWorkSession,
+  countUnknownForDay,
+  insertActivityEvent,
+  insertUnknownActivity,
+  insertWorkSession,
+  loadEngineSettings,
+  listProjectRules,
+  projectNameById,
+  reopenLastAutoSession,
+  createProjectRule,
+  touchUnknownActivity,
+  touchWorkSession
+} from './work-queries'
+import { loadConfig } from './store'
 
 let timer: ReturnType<typeof setInterval> | null = null
-let open: OpenSession | null = null
-let pendingSwitch: { key: string; since: number } | null = null
-let wasIdle = false
+let engine: EngineState = initialEngineState()
+let openWorkId: number | null = null
+let openUnknownId: number | null = null
 let lastBroadcast = 0
+let paused = false
+let contextLabel = 'In attesa del contesto'
+let wasIdle = false
 
 type ManualState = {
-  sessionId: number
   activityLabel: string
   projectId: number | null
   projectName: string | null
@@ -39,189 +50,142 @@ type ManualState = {
 }
 
 let manual: ManualState | null = null
-let paused = false
-let contextLabel = 'In attesa del contesto'
-let idlePending = 0
 
 function pollMs(): number {
-  return Number(setting('poll_interval_ms', '3000')) || 3000
+  return Number(setting('poll_interval_ms', '2000')) || 2000
 }
 
-function idleMs(): number {
-  return Number(setting('idle_threshold_ms', '300000')) || 300000
+function startOfLocalDay(ms: number): number {
+  const d = new Date(ms)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
 }
 
-function minSessionMs(): number {
-  return Number(setting('min_session_ms', '30000')) || 30000
-}
-
-function switchDebounceMs(): number {
-  return Number(setting('switch_debounce_ms', '15000')) || 15000
-}
-
-function resumeGapMs(): number {
-  return Number(setting('resume_gap_ms', '120000')) || 120000
-}
-
-function closeOpen(at?: number): void {
-  if (!open) return
-  const closing = open
-  if (at !== undefined) extendSession(closing.id, at)
-  open = null
-  pendingSwitch = null
-  if (closing.kind !== 'auto') return
-  const session = getSession(closing.id)
-  if (session && session.durationMs < minSessionMs()) {
-    deleteSession(closing.id)
+function applyEffects(effects: EngineEffect[], sampleProcess: string | null, sampleTitle: string | null, sampleUrl: string | null): void {
+  for (const effect of effects) {
+    if (effect.type === 'close_open_session' && openWorkId != null) {
+      closeWorkSession(openWorkId, effect.endedAt)
+      openWorkId = null
+    }
+    if (effect.type === 'start_session') {
+      openWorkId = insertWorkSession({
+        projectId: effect.projectId,
+        activityLabel: effect.activityLabel,
+        startedAt: effect.startedAt,
+        endedAt: effect.startedAt,
+        confidence: effect.confidence,
+        source: effect.source
+      })
+    }
+    if (effect.type === 'reuse_last_session') {
+      openWorkId = reopenLastAutoSession(effect.endedAt, effect.confidence)
+    }
+    if (effect.type === 'touch_open_session' && openWorkId != null) {
+      touchWorkSession(openWorkId, effect.endedAt, effect.confidence)
+    }
+    if (effect.type === 'begin_unknown') {
+      openUnknownId = insertUnknownActivity({
+        startedAt: effect.startedAt,
+        processName: sampleProcess,
+        windowTitle: sampleTitle,
+        url: sampleUrl,
+        previousProjectId: engine.unknown?.previousProjectId ?? engine.lastClosed?.projectId ?? null
+      })
+    }
+    if (effect.type === 'close_unknown' && openUnknownId != null) {
+      closeUnknownActivity(
+        openUnknownId,
+        effect.endedAt,
+        effect.nextProjectId,
+        effect.suggestedProjectId,
+        effect.confidence
+      )
+      openUnknownId = null
+    }
+    if (effect.type === 'debug_log') {
+      console.debug(effect.lines.join('\n'))
+    }
   }
-}
-
-function resumeIfCompatible(key: string, kind: OpenSession['kind'], now: number): boolean {
-  const last = getLastSessionByKey(key)
-  if (!last || last.origin === 'manual_timer') return false
-  if (kind === 'auto' && last.origin !== 'auto') return false
-  if (kind === 'idle' && last.origin !== 'idle_detection') return false
-  if (last.aggregationKey !== key) return false
-  if (now - last.endMs > resumeGapMs()) return false
-  open = { id: last.id, key, kind }
-  extendSession(last.id, now)
-  return true
-}
-
-function beginAutoSession(
-  now: number,
-  key: string,
-  processName: string,
-  windowTitle: string,
-  classified: ReturnType<typeof classifyWindow>
-): void {
-  if (resumeIfCompatible(key, 'auto', now)) {
-    if (open) extendSession(open.id, now, windowTitle)
-    return
-  }
-  const id = insertSession({
-    startMs: now,
-    endMs: now,
-    processName,
-    windowTitle,
-    repoSlug: classified.repoSlug,
-    projectId: classified.projectId,
-    activityLabel: null,
-    origin: 'auto',
-    classificationSource: classified.source,
-    aggregationKey: key
-  })
-  open = { id, key, kind: 'auto' }
 }
 
 function tick(): void {
   const now = Date.now()
-  idlePending = countIdleUnreviewed(todayDate())
+  const settings = loadEngineSettings()
 
-  if (manual) {
-    extendSession(manual.sessionId, now)
-    contextLabel = `Timer: ${manual.activityLabel}`
-    maybeBroadcast(now)
-    return
-  }
-
-  if (paused) {
-    closeOpen()
-    pendingSwitch = null
+  if (paused && !manual && !engine.hold) {
     contextLabel = 'Tracking in pausa'
     maybeBroadcast(now)
     return
   }
 
+  if (engine.open && new Date(engine.open.startedAt).toDateString() !== new Date(now).toDateString()) {
+    const split = onMidnightSplit(engine, startOfLocalDay(now))
+    engine = split.state
+    applyEffects(split.effects, null, null, null)
+  }
+
   const idleFor = getIdleMs()
-  if (idleFor >= idleMs()) {
-    const lastInput = now - idleFor
-    const key = 'idle'
-    if (!open || open.key !== key) {
-      closeOpen(lastInput)
-      pendingSwitch = null
-      if (!resumeIfCompatible(key, 'idle', now)) {
-        const id = insertSession({
-          startMs: lastInput,
-          endMs: now,
-          processName: 'Idle',
-          windowTitle: 'Inattività',
-          repoSlug: null,
-          projectId: null,
-          activityLabel: null,
-          origin: 'idle_detection',
-          classificationSource: 'idle',
-          aggregationKey: key
-        })
-        open = { id, key, kind: 'idle' }
-      }
-    } else {
-      extendSession(open.id, now)
-    }
-    wasIdle = true
-    contextLabel = 'Inattivo'
-    maybeBroadcast(now)
-    return
-  }
-
-  if (wasIdle && open?.kind === 'idle') {
-    const session = getSession(open.id)
-    closeOpen(now)
-    wasIdle = false
-    notifyIdleReturn(formatDuration(session ? now - session.startMs : idleFor))
-  }
-
   const win = getActiveWindow()
-  if (!win || isExcluded(win.processName)) {
-    if (open?.kind === 'auto') {
-      if (!pendingSwitch || pendingSwitch.key !== 'excluded') {
-        pendingSwitch = { key: 'excluded', since: now }
-      }
-      if (now - pendingSwitch.since < switchDebounceMs()) {
-        contextLabel = 'Escluso / nessuna finestra'
-        maybeBroadcast(now)
-        return
-      }
-    }
-    closeOpen()
-    contextLabel = 'Escluso / nessuna finestra'
+  const excluded = Boolean(win && isExcluded(win.processName))
+  const sample = enrichWindow(win, now, Math.round(idleFor / 1000))
+  sample.excluded = excluded
+
+  const rules = listProjectRules()
+  const classification = classifyActivity(sample, rules, engine.stickyProjectId)
+
+  if (!excluded) {
+    insertActivityEvent({
+      timestamp: sample.timestamp,
+      processName: sample.processName,
+      windowTitle: sample.windowTitle,
+      executablePath: sample.executablePath,
+      url: sample.url,
+      workspacePath: sample.workspacePath,
+      gitRepository: sample.gitRepository,
+      workingDirectory: sample.workingDirectory,
+      clickupTaskId: sample.clickupTaskId,
+      idleSeconds: sample.idleSeconds,
+      excluded: false,
+      candidateProjectId: classification.candidateProjectId,
+      confidence: classification.confidence,
+      evidence: JSON.stringify(classification.evidence),
+      machineState: engine.machine,
+      isNeutral: classification.isNeutral
+    })
+  }
+
+  const out = onActivity(engine, sample, classification, settings)
+  engine = out.state
+  applyEffects(out.effects, sample.processName, sample.windowTitle, sample.url)
+  if (openUnknownId != null) {
+    touchUnknownActivity(openUnknownId, now)
+  }
+
+  if (idleFor >= settings.idleThresholdMs) {
+    wasIdle = true
+    contextLabel = 'Inattivo (AFK)'
     maybeBroadcast(now)
     return
   }
-
-  const classified = classifyWindow({ processName: win.processName, windowTitle: win.windowTitle })
-  const key = classified.aggregationKey
-  const dayStamp = new Date(now).toDateString()
-
-  if (open && open.kind === 'auto') {
-    const current = getSession(open.id)
-    if (current && new Date(current.startMs).toDateString() !== dayStamp) {
-      closeOpen(now)
-    }
+  if (wasIdle) {
+    notifyIdleReturn(formatDuration(idleFor))
+    wasIdle = false
   }
 
-  if (open && open.key === key && open.kind === 'auto') {
-    pendingSwitch = null
-    extendSession(open.id, now, win.windowTitle)
-  } else if (open && open.kind === 'auto' && open.key !== key) {
-    if (!pendingSwitch || pendingSwitch.key !== key) {
-      pendingSwitch = { key, since: now }
-    }
-    if (now - pendingSwitch.since < switchDebounceMs()) {
-        contextLabel = `${win.processName} — ${classified.repoSlug ?? (win.windowTitle || '…')}`
-      maybeBroadcast(now)
-      return
-    }
-    const startedAt = pendingSwitch.since
-    closeOpen()
-    beginAutoSession(startedAt, key, win.processName, win.windowTitle, classified)
+  const stickyName = projectNameById(engine.stickyProjectId)
+  if (engine.hold?.source === 'manual_timer' && manual) {
+    contextLabel = `Timer: ${manual.activityLabel}`
+  } else if (engine.hold?.source === 'lock') {
+    contextLabel = `Lock: ${projectNameById(engine.hold.projectId) ?? 'progetto'}`
+  } else if (stickyName) {
+    const winBit = win ? `${win.processName}` : ''
+    contextLabel = `${stickyName}${winBit ? ` · ${winBit}` : ''}`
+  } else if (win && !excluded) {
+    contextLabel = `${win.processName} — ${classification.candidateProjectId ? stickyName ?? '…' : 'non classificato'}`
   } else {
-    pendingSwitch = null
-    beginAutoSession(now, key, win.processName, win.windowTitle, classified)
+    contextLabel = excluded ? 'Escluso / nessuna finestra' : 'In attesa del contesto'
   }
 
-  const projectBit = classified.repoSlug ?? (win.windowTitle || 'Non classificato')
-  contextLabel = `${win.processName} — ${projectBit}`
   maybeBroadcast(now)
 }
 
@@ -233,18 +197,24 @@ function maybeBroadcast(now: number): void {
 
 export function snapshot(): AppSnapshot {
   const config = loadConfig()
-  const status: TrackingStatus = manual
+  const status: TrackingStatus = engine.hold?.source === 'manual_timer' || manual
     ? 'manual'
     : paused
       ? 'paused'
-      : open?.kind === 'idle'
-        ? 'idle_pending'
-        : 'running'
+      : engine.hold?.source === 'lock'
+        ? 'locked'
+        : engine.machine === 'IDLE'
+          ? 'idle_pending'
+          : 'running'
+  const unknownCount = countUnknownForDay(todayDate())
   return {
     trackingStatus: status,
     privacyAccepted: config.privacyAccepted,
     currentContextLabel: contextLabel,
-    idlePendingCount: idlePending,
+    machineState: engine.machine,
+    stickyProjectName: projectNameById(engine.stickyProjectId),
+    unknownCount,
+    idlePendingCount: unknownCount,
     manualTimer: manual
       ? {
           activityLabel: manual.activityLabel,
@@ -252,14 +222,26 @@ export function snapshot(): AppSnapshot {
           startedAt: manual.startedAt
         }
       : null,
+    projectLock:
+      engine.hold?.source === 'lock'
+        ? {
+            projectId: engine.hold.projectId,
+            projectName: projectNameById(engine.hold.projectId),
+            expiresAt: engine.hold.expiresAt
+          }
+        : null,
     pollIntervalMs: pollMs(),
-    idleThresholdMs: idleMs()
+    idleThresholdMs: Number(setting('idle_threshold_ms', String(DEFAULT_SETTINGS.idleThresholdMs)))
   }
 }
 
 export function setPaused(value: boolean): void {
   paused = value
-  if (value && !manual) closeOpen()
+  if (value && !manual && !engine.hold) {
+    const out = onPause(engine, Date.now())
+    engine = out.state
+    applyEffects(out.effects, null, null, null)
+  }
   broadcastChanged()
 }
 
@@ -267,74 +249,104 @@ export function isPaused(): boolean {
   return paused
 }
 
+function applyHoldNow(hold: ProjectHold | null): void {
+  engine = setHold(engine, hold)
+}
+
 export function startManualTimer(payload: StartTimerPayload, projectName: string | null): void {
   const now = Date.now()
-  closeOpen(now)
   const activity = payload.activityLabel.trim()
   if (!activity) throw new Error('Nome attività obbligatorio')
-  const id = insertSession({
-    startMs: now,
-    endMs: now,
-    processName: 'Timer manuale',
-    windowTitle: activity,
-    repoSlug: null,
+  const settings = loadEngineSettings()
+  const expires = settings.lockTimeoutMs > 0 ? now + settings.lockTimeoutMs : null
+  applyHoldNow({
     projectId: payload.projectId,
     activityLabel: activity,
-    origin: 'manual_timer',
-    classificationSource: 'manual',
-    aggregationKey: `manual:${activity}:${payload.projectId ?? 'none'}`
+    startedAt: now,
+    expiresAt: expires,
+    source: 'manual_timer'
   })
   manual = {
-    sessionId: id,
     activityLabel: activity,
     projectId: payload.projectId,
     projectName,
     startedAt: now
   }
-  setSetting('manual_timer_open', String(id))
+  setSetting('manual_timer_open', '1')
   contextLabel = `Timer: ${activity}`
+  const sample = enrichWindow(getActiveWindow(), now, 0)
+  const classification = classifyActivity(sample, listProjectRules(), payload.projectId)
+  const out = onActivity(engine, sample, classification, settings)
+  engine = out.state
+  applyEffects(out.effects, sample.processName, sample.windowTitle, sample.url)
   broadcastChanged()
 }
 
 export function stopManualTimer(): void {
-  if (!manual) return
-  extendSession(manual.sessionId, Date.now())
+  if (!manual && engine.hold?.source !== 'manual_timer') return
+  applyHoldNow(null)
+  if (openWorkId != null) {
+    closeWorkSession(openWorkId, Date.now())
+    openWorkId = null
+  }
+  if (engine.open) {
+    engine = { ...engine, open: null, hold: null }
+  }
   manual = null
   setSetting('manual_timer_open', '')
   persistNow()
   broadcastChanged()
 }
 
+export function setProjectLock(projectId: number): void {
+  const now = Date.now()
+  const settings = loadEngineSettings()
+  const expires = settings.lockTimeoutMs > 0 ? now + settings.lockTimeoutMs : null
+  applyHoldNow({
+    projectId,
+    activityLabel: null,
+    startedAt: now,
+    expiresAt: expires,
+    source: 'lock'
+  })
+  const sample = enrichWindow(getActiveWindow(), now, 0)
+  const classification = classifyActivity(sample, listProjectRules(), projectId)
+  const out = onActivity(engine, sample, classification, settings)
+  engine = out.state
+  applyEffects(out.effects, sample.processName, sample.windowTitle, sample.url)
+  broadcastChanged()
+}
+
+export function clearProjectLock(): void {
+  applyHoldNow(null)
+  if (openWorkId != null && engine.open?.source === 'lock') {
+    closeWorkSession(openWorkId, Date.now())
+    openWorkId = null
+    engine = { ...engine, open: null }
+  }
+  broadcastChanged()
+}
+
 export function recoverInterruptedTimer(): void {
   const raw = setting('manual_timer_open', '')
   if (!raw) return
-  const id = Number(raw)
-  if (!id) {
-    setSetting('manual_timer_open', '')
-    return
-  }
-  const session = getSession(id)
-  if (session) {
-    notifyTimerInterrupted()
-  }
+  notifyTimerInterrupted()
   setSetting('manual_timer_open', '')
 }
 
-export function rememberAssignment(sessionId: number, projectId: number): void {
-  const session = getSession(sessionId)
-  if (!session) return
-  if (session.repoSlug) {
-    createMapping('repo', session.repoSlug, projectId, 20)
-  } else {
-    createMapping('process', session.processName, projectId, 5)
-  }
-  assignSession(sessionId, projectId, session.activityLabel, 'user_rule')
+export function rememberAssignment(_sessionId: number, projectId: number): void {
+  const project = listProjects().find((p) => p.id === projectId)
+  if (!project) return
+  createProjectRule('keyword', project.name, projectId, 50)
 }
 
 export function startTracker(initialPaused: boolean): void {
   paused = initialPaused
+  engine = initialEngineState()
+  openWorkId = null
+  openUnknownId = null
+  closeAnyOpenWorkSessions(Date.now())
   recoverInterruptedTimer()
-  pruneShortAutoSessions(minSessionMs())
   if (timer) clearInterval(timer)
   tick()
   timer = setInterval(tick, pollMs())
@@ -347,13 +359,16 @@ export function restartTrackerInterval(): void {
 
 export function stopTracker(): void {
   const now = Date.now()
-  if (manual) {
-    extendSession(manual.sessionId, now)
-    setSetting('manual_timer_open', '')
-    manual = null
-  } else {
-    closeOpen(now)
+  if (!paused) {
+    const out = onPause(engine, now)
+    engine = out.state
+    applyEffects(out.effects, null, null, null)
+  } else if (openWorkId != null) {
+    closeWorkSession(openWorkId, now)
+    openWorkId = null
   }
+  manual = null
+  setSetting('manual_timer_open', '')
   if (timer) clearInterval(timer)
   timer = null
   persistNow()
@@ -364,5 +379,5 @@ export function getContextLabel(): string {
 }
 
 export function hasManualTimer(): boolean {
-  return Boolean(manual)
+  return Boolean(manual) || engine.hold?.source === 'manual_timer'
 }

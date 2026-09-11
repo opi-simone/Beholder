@@ -523,6 +523,24 @@ select {
   box-shadow: 0 0 16px var(--gold-glow);
 }
 
+.muted.block {
+  display: block;
+  margin-top: 4px;
+}
+
+.debug-list {
+  max-height: 280px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.label-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .banner .btn-ghost {
   margin-left: 8px;
   padding: 4px 10px;

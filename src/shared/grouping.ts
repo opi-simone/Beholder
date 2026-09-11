@@ -1,9 +1,7 @@
-import type { Session } from './types'
+import type { WorkSession } from './types'
 
-export function sessionGroupLabel(session: Session): string {
-  if (session.origin === 'idle_detection' && !session.projectId) return 'Idle'
+export function workSessionGroupLabel(session: WorkSession): string {
   if (session.projectName) return session.projectName
-  if (session.repoSlug) return session.repoSlug
   if (session.activityLabel) return session.activityLabel
-  return session.processName || 'Non classificato'
+  return 'Non classificato'
 }

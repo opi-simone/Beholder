@@ -1,28 +1,48 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
-import { sessionGroupLabel } from '../../../shared/grouping'
-import type { Project, Session } from '../../../shared/types'
+import { workSessionGroupLabel } from '../../../shared/grouping'
+import type {
+  ActivityEventView,
+  LegacySession,
+  Project,
+  UnknownActivity,
+  WorkSession
+} from '../../../shared/types'
 import { datetimeLocalValue, dayBounds, formatClock, formatDuration, shiftDate, todayDate } from '../../../shared/time'
 
-type TimelineTab = 'cronologia' | 'riepilogo'
+type TimelineTab = 'riepilogo' | 'sessioni' | 'unknown'
 
-function clipDuration(session: Session, date: string): number {
+function clipWork(session: WorkSession, date: string): number {
   const { start, end } = dayBounds(date)
-  return Math.max(0, Math.min(session.endMs, end) - Math.max(session.startMs, start))
+  return Math.max(0, Math.min(session.endedAt, end) - Math.max(session.startedAt, start))
 }
 
 export default function TimelinePage(): JSX.Element {
   const [date, setDate] = useState(todayDate())
-  const [tab, setTab] = useState<TimelineTab>('cronologia')
+  const [tab, setTab] = useState<TimelineTab>('riepilogo')
   const [filterLabel, setFilterLabel] = useState<string | null>(null)
-  const [sessions, setSessions] = useState<Session[]>([])
+  const [sessions, setSessions] = useState<WorkSession[]>([])
+  const [unknowns, setUnknowns] = useState<UnknownActivity[]>([])
+  const [events, setEvents] = useState<ActivityEventView[]>([])
+  const [legacy, setLegacy] = useState<LegacySession[]>([])
   const [projects, setProjects] = useState<Project[]>([])
+  const [debug, setDebug] = useState(false)
+  const [showLegacy, setShowLegacy] = useState(false)
   const [error, setError] = useState('')
 
   async function reload(): Promise<void> {
-    const [list, projs] = await Promise.all([window.beholder.listSessions(date), window.beholder.listProjects()])
+    const [list, projs, unk, ev, leg] = await Promise.all([
+      window.beholder.listSessions(date),
+      window.beholder.listProjects(),
+      window.beholder.listUnknown(date),
+      debug ? window.beholder.listEvents(date) : Promise.resolve([]),
+      showLegacy ? window.beholder.listLegacySessions(date) : Promise.resolve([])
+    ])
     setSessions(list)
     setProjects(projs)
+    setUnknowns(unk)
+    setEvents(ev)
+    setLegacy(leg)
   }
 
   useEffect(() => {
@@ -31,23 +51,26 @@ export default function TimelinePage(): JSX.Element {
     return window.beholder.onChanged(() => {
       void reload()
     })
-  }, [date])
+  }, [date, debug, showLegacy])
 
   const groups = [
     ...sessions
       .reduce((map, session) => {
-        const label = sessionGroupLabel(session)
-        const cur = map.get(label) ?? { label, ms: 0, count: 0 }
-        cur.ms += clipDuration(session, date)
+        const label = workSessionGroupLabel(session)
+        const cur = map.get(label) ?? { label, ms: 0, count: 0, labels: new Map<string, number>() }
+        const ms = clipWork(session, date)
+        cur.ms += ms
         cur.count += 1
+        const task = session.activityLabel?.trim() || '(senza task)'
+        cur.labels.set(task, (cur.labels.get(task) ?? 0) + ms)
         map.set(label, cur)
         return map
-      }, new Map<string, { label: string; ms: number; count: number }>())
+      }, new Map<string, { label: string; ms: number; count: number; labels: Map<string, number> }>())
       .values()
   ].sort((a, b) => b.ms - a.ms)
 
   const visible = filterLabel
-    ? sessions.filter((session) => sessionGroupLabel(session) === filterLabel)
+    ? sessions.filter((session) => workSessionGroupLabel(session) === filterLabel)
     : sessions
 
   return (
@@ -72,13 +95,6 @@ export default function TimelinePage(): JSX.Element {
       <div className="subnav">
         <button
           type="button"
-          className={tab === 'cronologia' ? 'nav-btn active' : 'nav-btn'}
-          onClick={() => setTab('cronologia')}
-        >
-          Cronologia
-        </button>
-        <button
-          type="button"
           className={tab === 'riepilogo' ? 'nav-btn active' : 'nav-btn'}
           onClick={() => {
             setTab('riepilogo')
@@ -87,9 +103,31 @@ export default function TimelinePage(): JSX.Element {
         >
           Riepilogo
         </button>
+        <button
+          type="button"
+          className={tab === 'sessioni' ? 'nav-btn active' : 'nav-btn'}
+          onClick={() => setTab('sessioni')}
+        >
+          Sessioni
+        </button>
+        <button
+          type="button"
+          className={tab === 'unknown' ? 'nav-btn active' : 'nav-btn'}
+          onClick={() => setTab('unknown')}
+        >
+          Da classificare
+        </button>
+        <label className="check">
+          <input type="checkbox" checked={debug} onChange={(e) => setDebug(e.target.checked)} />
+          Debug
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={showLegacy} onChange={(e) => setShowLegacy(e.target.checked)} />
+          Storico precedente
+        </label>
       </div>
       {error && <p className="banner danger">{error}</p>}
-      {tab === 'riepilogo' ? (
+      {tab === 'riepilogo' && (
         <div className="timeline">
           {groups.length === 0 && <p className="muted">Nessuna sessione in questo giorno.</p>}
           {groups.map((group) => (
@@ -99,21 +137,30 @@ export default function TimelinePage(): JSX.Element {
               className="group-row"
               onClick={() => {
                 setFilterLabel(group.label)
-                setTab('cronologia')
+                setTab('sessioni')
               }}
             >
               <span>
                 <strong>{group.label}</strong>
                 <span className="muted">
                   {' '}
-                  · {group.count} {group.count === 1 ? 'blocco' : 'blocchi'}
+                  · {group.count} {group.count === 1 ? 'sessione' : 'sessioni'}
                 </span>
+                {group.labels.size > 1 && (
+                  <span className="muted block">
+                    {[...group.labels.entries()]
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([name, ms]) => `${name} ${formatDuration(ms)}`)
+                      .join(' · ')}
+                  </span>
+                )}
               </span>
               <strong>{formatDuration(group.ms)}</strong>
             </button>
           ))}
         </div>
-      ) : (
+      )}
+      {tab === 'sessioni' && (
         <div className="timeline">
           {filterLabel && (
             <p className="banner">
@@ -141,8 +188,63 @@ export default function TimelinePage(): JSX.Element {
           })}
         </div>
       )}
+      {tab === 'unknown' && (
+        <div className="timeline">
+          {unknowns.length === 0 && <p className="muted">Niente da classificare in questo giorno.</p>}
+          {unknowns.map((item) => (
+            <UnknownRow key={item.id} item={item} projects={projects} onError={setError} />
+          ))}
+        </div>
+      )}
+      {debug && (
+        <section className="card wide">
+          <h2>ActivityEvent</h2>
+          {events.length === 0 ? (
+            <p className="muted">Nessun evento (attiva Debug e attendi il campionamento).</p>
+          ) : (
+            <ul className="plain-list debug-list">
+              {events.map((event) => (
+                <li key={event.id}>
+                  <span>
+                    {formatClock(event.timestamp)} {event.processName ?? '—'} — {event.windowTitle ?? ''}
+                    {event.isNeutral ? ' · neutro' : ''} · {event.candidateProjectName ?? 'nessun progetto'} ·{' '}
+                    {event.confidence ?? 0}% · {event.machineState ?? ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+      {showLegacy && (
+        <section className="card wide">
+          <h2>Storico precedente</h2>
+          <p className="muted">Blocchi finestra precedenti al redesign. Solo lettura.</p>
+          {legacy.length === 0 ? (
+            <p className="muted">Nessuno storico in questo giorno.</p>
+          ) : (
+            <ul className="plain-list">
+              {legacy.map((row) => (
+                <li key={row.id}>
+                  <span>
+                    {formatClock(row.startMs)}–{formatClock(row.endMs)} {row.processName}
+                    {row.repoSlug ? ` — ${row.repoSlug}` : ''} · {row.projectName ?? 'Non classificato'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
     </>
   )
+}
+
+function sourceLabel(source: WorkSession['source']): string {
+  if (source === 'manual_timer') return 'Manuale'
+  if (source === 'lock') return 'Lock'
+  if (source === 'override') return 'Override'
+  return 'Automatico'
 }
 
 function SessionRow({
@@ -153,27 +255,23 @@ function SessionRow({
   onError,
   onProjects
 }: {
-  session: Session
-  previous?: Session
+  session: WorkSession
+  previous?: WorkSession
   projects: Project[]
   highlight?: boolean
   onError: (msg: string) => void
   onProjects: (projects: Project[]) => void
 }): JSX.Element {
-  const [start, setStart] = useState(datetimeLocalValue(session.startMs))
-  const [end, setEnd] = useState(datetimeLocalValue(session.endMs))
+  const [start, setStart] = useState(datetimeLocalValue(session.startedAt))
+  const [end, setEnd] = useState(datetimeLocalValue(session.endedAt))
   const [projectId, setProjectId] = useState(session.projectId ? String(session.projectId) : '')
   const [remember, setRemember] = useState(false)
-  const [splitAt, setSplitAt] = useState(datetimeLocalValue(session.startMs + (session.endMs - session.startMs) / 2))
 
   useEffect(() => {
-    setStart(datetimeLocalValue(session.startMs))
-    setEnd(datetimeLocalValue(session.endMs))
+    setStart(datetimeLocalValue(session.startedAt))
+    setEnd(datetimeLocalValue(session.endedAt))
     setProjectId(session.projectId ? String(session.projectId) : '')
   }, [session])
-
-  const originLabel =
-    session.origin === 'manual_timer' ? 'Manuale' : session.origin === 'idle_detection' ? 'Idle' : 'Automatico'
 
   async function run(action: () => Promise<void>): Promise<void> {
     try {
@@ -188,18 +286,16 @@ function SessionRow({
     <article className={highlight ? 'session highlight' : 'session'}>
       <header>
         <strong>
-          {formatClock(session.startMs)} – {formatClock(session.endMs)} · {formatDuration(session.durationMs)}
+          {formatClock(session.startedAt)} – {formatClock(session.endedAt)} · {formatDuration(session.durationMs)}
         </strong>
-        <span className="pill">{originLabel}</span>
+        <span className="pill">{sourceLabel(session.source)}</span>
       </header>
       <p>
-        {session.processName}
-        {session.repoSlug ? ` — ${session.repoSlug}` : session.windowTitle ? ` — ${session.windowTitle}` : ''}
-      </p>
-      <p className="muted">
         {session.projectName ?? 'Non classificato'}
         {session.activityLabel ? ` · ${session.activityLabel}` : ''}
-        {` · ${session.classificationSource}`}
+      </p>
+      <p className="muted">
+        confidenza {Math.round(session.confidence)}% · {session.status}
       </p>
       <div className="session-edit">
         <input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
@@ -241,7 +337,7 @@ function SessionRow({
             })
           }
         >
-          Assegna
+          Override
         </button>
         <button
           type="button"
@@ -260,14 +356,6 @@ function SessionRow({
         </button>
       </div>
       <div className="session-edit">
-        <input type="datetime-local" value={splitAt} onChange={(e) => setSplitAt(e.target.value)} />
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={() => void run(() => window.beholder.splitSession(session.id, new Date(splitAt).getTime()))}
-        >
-          Dividi
-        </button>
         <button
           type="button"
           className="btn-ghost"
@@ -278,6 +366,66 @@ function SessionRow({
         </button>
         <button type="button" className="btn-danger" onClick={() => void run(() => window.beholder.deleteSession(session.id))}>
           Elimina
+        </button>
+      </div>
+    </article>
+  )
+}
+
+function UnknownRow({
+  item,
+  projects,
+  onError
+}: {
+  item: UnknownActivity
+  projects: Project[]
+  onError: (msg: string) => void
+}): JSX.Element {
+  const [projectId, setProjectId] = useState(item.suggestedProjectId ? String(item.suggestedProjectId) : '')
+
+  async function run(action: () => Promise<void>): Promise<void> {
+    try {
+      onError('')
+      await action()
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'Operazione non riuscita')
+    }
+  }
+
+  return (
+    <article className="session">
+      <header>
+        <strong>
+          {formatClock(item.startedAt)} – {formatClock(item.endedAt)} · {formatDuration(item.endedAt - item.startedAt)}
+        </strong>
+        <span className="pill">Unknown</span>
+      </header>
+      <p>
+        {item.processName ?? '—'}
+        {item.windowTitle ? ` — ${item.windowTitle}` : ''}
+      </p>
+      <p className="muted">
+        precedente: {item.previousProjectName ?? '—'} · successivo: {item.nextProjectName ?? '—'}
+        {item.suggestedProjectName ? ` · suggerito: ${item.suggestedProjectName}` : ''}
+      </p>
+      <div className="session-edit">
+        <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+          <option value="">Progetto</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={!projectId}
+          onClick={() =>
+            void run(() => window.beholder.assignUnknown(item.id, Number(projectId), null))
+          }
+        >
+          Assegna
         </button>
       </div>
     </article>

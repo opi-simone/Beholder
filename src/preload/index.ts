@@ -1,57 +1,45 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type {
-  AppSettings,
-  AppSnapshot,
-  AssignPayload,
-  DashboardDay,
-  Mapping,
-  MatchType,
-  Project,
-  Session,
-  StartTimerPayload
-} from '../shared/types'
+import type { BeholderApi } from '../shared/types'
 
-const api = {
-  getSnapshot: (): Promise<AppSnapshot> => ipcRenderer.invoke('app:getSnapshot'),
-  acceptPrivacy: (): Promise<AppSnapshot> => ipcRenderer.invoke('app:acceptPrivacy'),
-  setPaused: (paused: boolean): Promise<AppSnapshot> => ipcRenderer.invoke('app:setPaused', paused),
-  getDashboard: (date: string): Promise<DashboardDay> => ipcRenderer.invoke('dashboard:get', date),
-  listSessions: (date: string): Promise<Session[]> => ipcRenderer.invoke('sessions:list', date),
-  updateTimes: (id: number, startMs: number, endMs: number): Promise<void> =>
-    ipcRenderer.invoke('sessions:updateTimes', id, startMs, endMs),
-  deleteSession: (id: number): Promise<void> => ipcRenderer.invoke('sessions:delete', id),
-  splitSession: (id: number, atMs: number): Promise<void> => ipcRenderer.invoke('sessions:split', id, atMs),
-  mergeSessions: (firstId: number, secondId: number): Promise<void> =>
-    ipcRenderer.invoke('sessions:merge', firstId, secondId),
-  assignSession: (payload: AssignPayload): Promise<void> => ipcRenderer.invoke('sessions:assign', payload),
-  listProjects: (): Promise<Project[]> => ipcRenderer.invoke('projects:list'),
-  createProject: (name: string): Promise<Project> => ipcRenderer.invoke('projects:create', name),
-  listMappings: (): Promise<Mapping[]> => ipcRenderer.invoke('mappings:list'),
-  createMapping: (matchType: MatchType, pattern: string, projectId: number): Promise<void> =>
-    ipcRenderer.invoke('mappings:create', matchType, pattern, projectId),
-  deleteMapping: (id: number): Promise<void> => ipcRenderer.invoke('mappings:delete', id),
-  getSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
-  updateSettings: (patch: {
-    pollIntervalMs?: number
-    idleThresholdMs?: number
-    minSessionMs?: number
-    switchDebounceMs?: number
-    resumeGapMs?: number
-  }): Promise<void> => ipcRenderer.invoke('settings:update', patch),
-  addExcluded: (processName: string): Promise<void> => ipcRenderer.invoke('excluded:add', processName),
-  removeExcluded: (processName: string): Promise<void> => ipcRenderer.invoke('excluded:remove', processName),
-  startTimer: (payload: StartTimerPayload): Promise<AppSnapshot> => ipcRenderer.invoke('timer:start', payload),
-  stopTimer: (): Promise<AppSnapshot> => ipcRenderer.invoke('timer:stop'),
-  minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
-  maximize: (): Promise<void> => ipcRenderer.invoke('window:maximize'),
-  closeWindow: (): Promise<void> => ipcRenderer.invoke('window:close'),
-  quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
-  onChanged: (cb: () => void): (() => void) => {
+const api: BeholderApi = {
+  getSnapshot: () => ipcRenderer.invoke('app:getSnapshot'),
+  acceptPrivacy: () => ipcRenderer.invoke('app:acceptPrivacy'),
+  setPaused: (paused) => ipcRenderer.invoke('app:setPaused', paused),
+  getDashboard: (date) => ipcRenderer.invoke('dashboard:get', date),
+  listSessions: (date) => ipcRenderer.invoke('sessions:list', date),
+  updateTimes: (id, startMs, endMs) => ipcRenderer.invoke('sessions:updateTimes', id, startMs, endMs),
+  deleteSession: (id) => ipcRenderer.invoke('sessions:delete', id),
+  splitSession: (id, atMs) => ipcRenderer.invoke('sessions:split', id, atMs),
+  mergeSessions: (firstId, secondId) => ipcRenderer.invoke('sessions:merge', firstId, secondId),
+  assignSession: (payload) => ipcRenderer.invoke('sessions:assign', payload),
+  listLegacySessions: (date) => ipcRenderer.invoke('legacy:list', date),
+  listEvents: (date) => ipcRenderer.invoke('events:list', date),
+  listUnknown: (date) => ipcRenderer.invoke('unknown:list', date),
+  assignUnknown: (id, projectId, activityLabel) => ipcRenderer.invoke('unknown:assign', id, projectId, activityLabel),
+  listProjects: () => ipcRenderer.invoke('projects:list'),
+  createProject: (name) => ipcRenderer.invoke('projects:create', name),
+  listRules: () => ipcRenderer.invoke('rules:list'),
+  createRule: (ruleType, ruleValue, projectId, weight) =>
+    ipcRenderer.invoke('rules:create', ruleType, ruleValue, projectId, weight),
+  deleteRule: (id) => ipcRenderer.invoke('rules:delete', id),
+  setLock: (projectId) => ipcRenderer.invoke('lock:set', projectId),
+  clearLock: () => ipcRenderer.invoke('lock:clear'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
+  addExcluded: (processName) => ipcRenderer.invoke('excluded:add', processName),
+  removeExcluded: (processName) => ipcRenderer.invoke('excluded:remove', processName),
+  startTimer: (payload) => ipcRenderer.invoke('timer:start', payload),
+  stopTimer: () => ipcRenderer.invoke('timer:stop'),
+  minimize: () => ipcRenderer.invoke('window:minimize'),
+  maximize: () => ipcRenderer.invoke('window:maximize'),
+  closeWindow: () => ipcRenderer.invoke('window:close'),
+  quit: () => ipcRenderer.invoke('app:quit'),
+  onChanged: (cb) => {
     const handler = (): void => cb()
     ipcRenderer.on('app:changed', handler)
     return () => ipcRenderer.removeListener('app:changed', handler)
   },
-  onOpen: (cb: (page: 'dashboard' | 'timeline' | 'timer') => void): (() => void) => {
+  onOpen: (cb) => {
     const handler = (_e: unknown, page: 'dashboard' | 'timeline' | 'timer'): void => cb(page)
     ipcRenderer.on('ui:open', handler)
     return () => ipcRenderer.removeListener('ui:open', handler)
@@ -60,4 +48,4 @@ const api = {
 
 contextBridge.exposeInMainWorld('beholder', api)
 
-export type BeholderApi = typeof api
+export type { BeholderApi }

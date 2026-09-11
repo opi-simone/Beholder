@@ -305,7 +305,10 @@ export function dashboardForDay(date: string): DashboardDay {
     manualMs,
     unclassifiedMs,
     idleMs,
-    byProject: [...by.values()].sort((a, b) => b.ms - a.ms)
+    byProject: [...by.values()]
+      .map((row) => ({ ...row, byLabel: [] as { label: string; ms: number }[] }))
+      .sort((a, b) => b.ms - a.ms),
+    unknownMs: 0
   }
 }
 

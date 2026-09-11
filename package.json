@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "preview": "electron-vite preview"
+    "preview": "electron-vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "@koromix/koffi-win32-x64": "^3.2.1",
@@ -25,7 +26,8 @@
     "electron": "^34.0.0",
     "electron-vite": "^5.0.0",
     "typescript": "^5.7.2",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "vitest": "^3.2.4"
   },
   "allowScripts": {
     "koffi@3.2.1": true

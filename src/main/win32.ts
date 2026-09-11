@@ -5,6 +5,7 @@ export type ActiveWindow = {
   pid: number
   processName: string
   windowTitle: string
+  executablePath: string | null
 }
 
 const user32 = koffi.load('user32.dll')
@@ -58,6 +59,7 @@ export function getActiveWindow(): ActiveWindow | null {
   const windowTitle = readWString(titleBuf)
 
   let processName = pid ? `pid-${pid}` : 'unknown'
+  let executablePath: string | null = null
   if (pid) {
     const handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) as number
     if (handle) {
@@ -67,7 +69,8 @@ export function getActiveWindow(): ActiveWindow | null {
         const size = [chars]
         const ok = QueryFullProcessImageNameW(handle, 0, nameBuf, size)
         if (ok) {
-          processName = basename(readWString(nameBuf)) || processName
+          executablePath = readWString(nameBuf) || null
+          processName = basename(executablePath ?? '') || processName
         }
       } finally {
         CloseHandle(handle)
@@ -75,5 +78,5 @@ export function getActiveWindow(): ActiveWindow | null {
     }
   }
 
-  return { pid, processName, windowTitle }
+  return { pid, processName, windowTitle, executablePath }
 }

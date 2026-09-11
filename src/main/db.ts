@@ -59,6 +59,131 @@ CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions(start_ms);
 CREATE INDEX IF NOT EXISTS idx_sessions_key ON sessions(aggregation_key, end_ms);
 `
 
+const MIGRATION_002 = `
+CREATE TABLE IF NOT EXISTS project_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  rule_type TEXT NOT NULL,
+  rule_value TEXT NOT NULL,
+  weight INTEGER NOT NULL,
+  FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+
+CREATE TABLE IF NOT EXISTS activity_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  timestamp INTEGER NOT NULL,
+  process_name TEXT,
+  window_title TEXT,
+  executable_path TEXT,
+  url TEXT,
+  workspace_path TEXT,
+  git_repository TEXT,
+  working_directory TEXT,
+  clickup_task_id TEXT,
+  idle_seconds INTEGER DEFAULT 0,
+  excluded INTEGER DEFAULT 0,
+  candidate_project_id INTEGER,
+  confidence REAL,
+  evidence TEXT,
+  machine_state TEXT,
+  is_neutral INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS work_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER,
+  activity_label TEXT,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  duration_ms INTEGER,
+  confidence REAL,
+  source TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+
+CREATE TABLE IF NOT EXISTS unknown_activities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  process_name TEXT,
+  window_title TEXT,
+  url TEXT,
+  previous_project_id INTEGER,
+  next_project_id INTEGER,
+  suggested_project_id INTEGER,
+  confidence REAL
+);
+
+CREATE TABLE IF NOT EXISTS manual_overrides (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER,
+  activity_label TEXT,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  work_session_id INTEGER,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_events_ts ON activity_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_work_sessions_start ON work_sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_unknown_start ON unknown_activities(started_at);
+`
+
+function schemaVersion(): number {
+  const version = get<{ version: number }>('SELECT MAX(version) as version FROM schema_version')
+  return Number(version?.version ?? 0)
+}
+
+function migrate(): void {
+  ensure().run(MIGRATION_001)
+  let version = schemaVersion()
+  if (!version) {
+    ensure().run('INSERT INTO schema_version (version) VALUES (1)')
+    version = 1
+  }
+  if (version < 2) {
+    ensure().run(MIGRATION_002)
+    ensure().run(`
+      INSERT INTO project_rules (project_id, rule_type, rule_value, weight)
+      SELECT project_id,
+        CASE match_type
+          WHEN 'repo' THEN 'repository'
+          WHEN 'title_contains' THEN 'keyword'
+          WHEN 'process' THEN 'process'
+          ELSE match_type
+        END,
+        pattern,
+        CASE match_type
+          WHEN 'repo' THEN 100
+          WHEN 'title_contains' THEN 50
+          WHEN 'process' THEN 0
+          ELSE 50
+        END
+      FROM project_mappings
+    `)
+    ensure().run('INSERT INTO schema_version (version) VALUES (2)')
+  }
+
+  const seed = (key: string, value: string): void => {
+    ensure().run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [key, value])
+  }
+  seed('poll_interval_ms', '2000')
+  seed('idle_threshold_ms', '300000')
+  seed('start_threshold', '60')
+  seed('switch_threshold', '70')
+  seed('high_confidence', '95')
+  seed('medium_confidence', '80')
+  seed('switch_delay_high_sec', '30')
+  seed('switch_delay_medium_sec', '45')
+  seed('switch_delay_low_sec', '90')
+  seed('max_gap_fill_ms', '300000')
+  seed('lock_timeout_ms', '3600000')
+  seed('confidence_decay', '5')
+}
+
 export async function openDatabase(): Promise<void> {
   if (db) return
   dbPath = join(app.getPath('userData'), 'beholder.db')
@@ -66,25 +191,16 @@ export async function openDatabase(): Promise<void> {
 
   const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm')
   const SQL = await initSqlJs({
-    wasmBinary: readFileSync(wasmPath)
+    wasmBinary: readFileSync(wasmPath) as never
   })
 
   if (existsSync(dbPath)) {
-    db = new SQL.Database(readFileSync(dbPath))
+    db = new SQL.Database(readFileSync(dbPath) as never)
   } else {
     db = new SQL.Database()
   }
 
-  db.run(MIGRATION_001)
-  const version = get<{ version: number }>('SELECT MAX(version) as version FROM schema_version')
-  if (!version?.version) {
-    db.run('INSERT INTO schema_version (version) VALUES (1)')
-  }
-  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('poll_interval_ms', '3000')`)
-  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('idle_threshold_ms', '300000')`)
-  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('min_session_ms', '30000')`)
-  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('switch_debounce_ms', '15000')`)
-  db.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('resume_gap_ms', '120000')`)
+  migrate()
   persistNow()
 }
 

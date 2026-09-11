@@ -1,4 +1,4 @@
-import type { BeholderApi } from './index'
+import type { BeholderApi } from '../shared/types'
 
 declare global {
   interface Window {

@@ -11,9 +11,12 @@ type Props = {
 
 export default function DashboardPage({ snap, onOpenTimer, onOpenTimeline }: Props): JSX.Element {
   const [day, setDay] = useState<DashboardDay | null>(null)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [lockProject, setLockProject] = useState('')
 
   useEffect(() => {
     void window.beholder.getDashboard(todayDate()).then(setDay)
+    void window.beholder.listProjects().then(setProjects)
   }, [snap])
 
   const paused = snap.trackingStatus === 'paused'
@@ -24,7 +27,9 @@ export default function DashboardPage({ snap, onOpenTimer, onOpenTimeline }: Pro
         ? 'In pausa'
         : snap.trackingStatus === 'idle_pending'
           ? 'Inattivo'
-          : 'Tracking automatico'
+          : snap.trackingStatus === 'locked'
+            ? `Lock ${snap.projectLock?.projectName ?? ''}`
+            : 'Tracking automatico'
   const maxProject = Math.max(1, ...(day?.byProject.map((row) => row.ms) ?? [0]))
 
   return (
@@ -32,21 +37,22 @@ export default function DashboardPage({ snap, onOpenTimer, onOpenTimeline }: Pro
       <section className="hero">
         <p className="eyebrow">Dashboard giornaliera</p>
         <h1>Oggi</h1>
-        <p className="muted">{snap.currentContextLabel}</p>
+        <p className="muted">
+          {snap.currentContextLabel}
+          {snap.stickyProjectName ? ` · sticky: ${snap.stickyProjectName}` : ''} · {snap.machineState}
+        </p>
       </section>
-      {snap.idlePendingCount > 0 && (
+      {snap.unknownCount > 0 && (
         <button type="button" className="banner" onClick={onOpenTimeline}>
-          <span>
-            {snap.idlePendingCount} periodo/i idle da revisionare in timeline.
-          </span>
+          <span>Da classificare oggi: {snap.unknownCount} intervallo/i.</span>
           <span aria-hidden="true">›</span>
         </button>
       )}
       <section className="stats">
         <StatCard icon="clock" label="Tempo rilevato" value={formatDuration(day?.totalMs ?? 0)} />
         <StatCard icon="play" label="Timer manuali" value={formatDuration(day?.manualMs ?? 0)} />
-        <StatCard icon="file" label="Non classificato" value={formatDuration(day?.unclassifiedMs ?? 0)} tone="gold" />
-        <StatCard icon="idle" label="Idle" value={formatDuration(day?.idleMs ?? 0)} tone="purple" />
+        <StatCard icon="file" label="Da classificare" value={formatDuration(day?.unknownMs ?? 0)} tone="gold" />
+        <StatCard icon="idle" label="Non attribuito" value={formatDuration(day?.unclassifiedMs ?? 0)} tone="purple" />
         <StatCard icon="pulse" label="Stato" value={statusLabel} tone="success" />
         <StatCard icon="hourglass" label="Timer attivo" value={snap.manualTimer ? snap.manualTimer.activityLabel : 'Nessuno'} />
       </section>
@@ -65,6 +71,15 @@ export default function DashboardPage({ snap, onOpenTimer, onOpenTimeline }: Pro
                 <div className="bar-track">
                   <div className="bar-fill" style={{ width: `${Math.max(8, (row.ms / maxProject) * 100)}%` }} />
                 </div>
+                {row.byLabel.length > 0 && (
+                  <ul className="label-list">
+                    {row.byLabel.map((item) => (
+                      <li key={item.label}>
+                        {item.label} · {formatDuration(item.ms)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             ))}
           </div>
@@ -87,6 +102,30 @@ export default function DashboardPage({ snap, onOpenTimer, onOpenTimeline }: Pro
           <button type="button" className="btn-ghost" onClick={onOpenTimer}>
             Avvia timer manuale
           </button>
+        )}
+        {snap.projectLock ? (
+          <button type="button" className="btn-ghost" onClick={() => void window.beholder.clearLock()}>
+            Sblocca {snap.projectLock.projectName ?? 'progetto'}
+          </button>
+        ) : (
+          <>
+            <select value={lockProject} onChange={(e) => setLockProject(e.target.value)}>
+              <option value="">Lock progetto…</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={!lockProject}
+              onClick={() => void window.beholder.setLock(Number(lockProject))}
+            >
+              🔒 Lock
+            </button>
+          </>
         )}
       </div>
     </>
