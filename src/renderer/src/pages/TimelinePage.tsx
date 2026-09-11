@@ -75,7 +75,7 @@ export default function TimelinePage(): JSX.Element {
 
   return (
     <>
-      <section className="hero row">
+      <section className="page-header row">
         <div>
           <p className="eyebrow">Timeline</p>
           <h1>{date}</h1>

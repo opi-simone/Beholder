@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
-import type { AppSettings, Project, ProjectRuleView, RuleType } from '../../../shared/types'
+import type { AppSettings, Project, ProjectRuleView, RuleType, UiTheme } from '../../../shared/types'
 
 const RULE_TYPES: { value: RuleType; label: string }[] = [
   { value: 'repository', label: 'Repository' },
@@ -12,7 +12,7 @@ const RULE_TYPES: { value: RuleType; label: string }[] = [
   { value: 'process', label: 'Processo' }
 ]
 
-export default function SettingsPage(): JSX.Element {
+export default function SettingsPage({ theme, onTheme }: { theme: UiTheme; onTheme: (theme: UiTheme) => void }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [rules, setRules] = useState<ProjectRuleView[]>([])
@@ -45,9 +45,23 @@ export default function SettingsPage(): JSX.Element {
 
   return (
     <>
-      <section className="hero">
-        <p className="eyebrow">Impostazioni</p>
-        <h1>Tracking per progetto</h1>
+      <section className="page-header">
+        <div>
+          <p className="eyebrow">Impostazioni</p>
+          <h1>Tracking per progetto</h1>
+        </div>
+      </section>
+      <section className="card wide">
+        <h2>Aspetto</h2>
+        <p className="muted">Scegli il tema dell&apos;interfaccia. La preferenza resta salvata.</p>
+        <div className="theme-toggle" role="group" aria-label="Tema">
+          <button type="button" className={theme === 'light' ? 'active' : ''} onClick={() => onTheme('light')}>
+            Chiaro
+          </button>
+          <button type="button" className={theme === 'dark' ? 'active' : ''} onClick={() => onTheme('dark')}>
+            Scuro
+          </button>
+        </div>
       </section>
       <section className="card wide">
         <h2>Algoritmo</h2>

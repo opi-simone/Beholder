@@ -32,13 +32,13 @@ export function createMainWindow(): BrowserWindow {
   }
 
   mainWin = new BrowserWindow({
-    width: 960,
-    height: 640,
-    minWidth: 720,
-    minHeight: 480,
+    width: 1280,
+    height: 800,
+    minWidth: 980,
+    minHeight: 640,
     show: false,
     frame: false,
-    backgroundColor: '#030A12',
+    backgroundColor: '#F7F9FC',
     title: 'Beholder',
     icon: getWindowIconPath(),
     webPreferences: {

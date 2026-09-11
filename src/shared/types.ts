@@ -143,6 +143,8 @@ export type DashboardDay = {
   }[]
 }
 
+export type UiTheme = 'light' | 'dark'
+
 export type AppSettings = {
   pollIntervalMs: number
   idleThresholdMs: number
@@ -157,6 +159,7 @@ export type AppSettings = {
   lockTimeoutMin: number
   confidenceDecay: number
   excludedProcesses: string[]
+  theme: UiTheme
 }
 
 export type StartTimerPayload = {

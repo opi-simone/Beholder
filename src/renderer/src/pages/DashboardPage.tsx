@@ -1,25 +1,31 @@
 import { useEffect, useState } from 'react'
 import type { JSX, ReactNode } from 'react'
 import type { AppSnapshot, DashboardDay, Project } from '../../../shared/types'
-import { formatDuration, todayDate } from '../../../shared/time'
+import { formatDuration, formatLongDate, todayDate } from '../../../shared/time'
+import {
+  IconChart,
+  IconChevron,
+  IconClassify,
+  IconClock,
+  IconFile,
+  IconHourglass,
+  IconPlay,
+  IconPulse,
+  IconUser
+} from '../icons'
 
 type Props = {
   snap: AppSnapshot
-  onOpenTimer: () => void
   onOpenTimeline: () => void
 }
 
-export default function DashboardPage({ snap, onOpenTimer, onOpenTimeline }: Props): JSX.Element {
+export default function DashboardPage({ snap, onOpenTimeline }: Props): JSX.Element {
   const [day, setDay] = useState<DashboardDay | null>(null)
-  const [projects, setProjects] = useState<Project[]>([])
-  const [lockProject, setLockProject] = useState('')
 
   useEffect(() => {
     void window.beholder.getDashboard(todayDate()).then(setDay)
-    void window.beholder.listProjects().then(setProjects)
   }, [snap])
 
-  const paused = snap.trackingStatus === 'paused'
   const statusLabel =
     snap.trackingStatus === 'manual'
       ? 'Timer manuale'
@@ -34,32 +40,49 @@ export default function DashboardPage({ snap, onOpenTimer, onOpenTimeline }: Pro
 
   return (
     <>
-      <section className="hero">
-        <p className="eyebrow">Dashboard giornaliera</p>
-        <h1>Oggi</h1>
-        <p className="muted">
-          {snap.currentContextLabel}
-          {snap.stickyProjectName ? ` · sticky: ${snap.stickyProjectName}` : ''} · {snap.machineState}
-        </p>
+      <section className="page-header">
+        <div>
+          <p className="eyebrow">Dashboard giornaliera</p>
+          <h1>Oggi</h1>
+          <p className="page-date">{formatLongDate()}</p>
+        </div>
+        <p className="page-quote">“Piccoli passi, risultati duraturi.”</p>
       </section>
       {snap.unknownCount > 0 && (
-        <button type="button" className="banner" onClick={onOpenTimeline}>
+        <button type="button" className="classify-banner" onClick={onOpenTimeline}>
+          <span className="classify-icon">
+            <IconClassify width={18} height={18} />
+          </span>
           <span>Da classificare oggi: {snap.unknownCount} intervallo/i.</span>
-          <span aria-hidden="true">›</span>
+          <IconChevron width={16} height={16} />
         </button>
       )}
-      <section className="stats">
-        <StatCard icon="clock" label="Tempo rilevato" value={formatDuration(day?.totalMs ?? 0)} />
-        <StatCard icon="play" label="Timer manuali" value={formatDuration(day?.manualMs ?? 0)} />
-        <StatCard icon="file" label="Da classificare" value={formatDuration(day?.unknownMs ?? 0)} tone="gold" />
-        <StatCard icon="idle" label="Non attribuito" value={formatDuration(day?.unclassifiedMs ?? 0)} tone="purple" />
-        <StatCard icon="pulse" label="Stato" value={statusLabel} tone="success" />
-        <StatCard icon="hourglass" label="Timer attivo" value={snap.manualTimer ? snap.manualTimer.activityLabel : 'Nessuno'} />
+      <section className="stat-grid">
+        <StatCard icon="clock" label="Tempo rilevato" value={formatDuration(day?.totalMs ?? 0)} hint="Tempo totale oggi" />
+        <StatCard icon="play" label="Timer manuale" value={formatDuration(day?.manualMs ?? 0)} hint="Tempo tracciato manualmente" />
+        <StatCard icon="file" label="Da classificare" value={formatDuration(day?.unknownMs ?? 0)} hint="Intervalli da assegnare" />
+        <StatCard icon="idle" label="Non attribuito" value={formatDuration(day?.unclassifiedMs ?? 0)} hint="Tempo senza progetto" />
+        <StatCard icon="pulse" label="Stato" value={statusLabel} hint="Monitoraggio attivo" tone="success" />
+        <StatCard
+          icon="hourglass"
+          label="Timer attivo"
+          value={snap.manualTimer ? snap.manualTimer.activityLabel : 'Nessuno'}
+          hint={snap.manualTimer ? 'Timer in esecuzione' : 'Nessun timer in esecuzione'}
+        />
       </section>
       <section className="card wide">
-        <h2>Tempo per progetto</h2>
+        <div className="card-head">
+          <h2>Tempo per progetto</h2>
+          <span className="chip">Oggi</span>
+        </div>
         {day && day.byProject.length === 0 ? (
-          <p className="muted">Nessuna sessione oggi.</p>
+          <div className="empty-state">
+            <span className="empty-icon">
+              <IconChart width={22} height={22} />
+            </span>
+            <p>Nessuna sessione oggi.</p>
+            <p className="muted">Il tempo tracciato verrà mostrato qui.</p>
+          </div>
         ) : (
           <div className="project-bars">
             {day?.byProject.map((row) => (
@@ -85,49 +108,6 @@ export default function DashboardPage({ snap, onOpenTimer, onOpenTimeline }: Pro
           </div>
         )}
       </section>
-      <div className="actions">
-        <button
-          type="button"
-          className="btn-primary"
-          disabled={Boolean(snap.manualTimer)}
-          onClick={() => void window.beholder.setPaused(!paused)}
-        >
-          {paused ? 'Riprendi tracking' : 'Metti in pausa'}
-        </button>
-        {snap.manualTimer ? (
-          <button type="button" className="btn-ghost" onClick={() => void window.beholder.stopTimer()}>
-            Stop timer
-          </button>
-        ) : (
-          <button type="button" className="btn-ghost" onClick={onOpenTimer}>
-            Avvia timer manuale
-          </button>
-        )}
-        {snap.projectLock ? (
-          <button type="button" className="btn-ghost" onClick={() => void window.beholder.clearLock()}>
-            Sblocca {snap.projectLock.projectName ?? 'progetto'}
-          </button>
-        ) : (
-          <>
-            <select value={lockProject} onChange={(e) => setLockProject(e.target.value)}>
-              <option value="">Lock progetto…</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="btn-ghost"
-              disabled={!lockProject}
-              onClick={() => void window.beholder.setLock(Number(lockProject))}
-            >
-              🔒 Lock
-            </button>
-          </>
-        )}
-      </div>
     </>
   )
 }
@@ -136,12 +116,14 @@ function StatCard({
   icon,
   label,
   value,
+  hint,
   tone = 'blue'
 }: {
   icon: 'clock' | 'play' | 'file' | 'idle' | 'pulse' | 'hourglass'
   label: string
   value: string
-  tone?: 'blue' | 'gold' | 'purple' | 'success'
+  hint: string
+  tone?: 'blue' | 'success'
 }): JSX.Element {
   return (
     <article className="stat">
@@ -149,56 +131,20 @@ function StatCard({
       <div>
         <span className="stat-label">{label}</span>
         <strong className={tone === 'success' ? 'ok' : undefined}>{value}</strong>
+        <span className="stat-hint">{hint}</span>
       </div>
     </article>
   )
 }
 
 function iconSvg(kind: string): ReactNode {
-  const common = { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8 }
-  if (kind === 'play') {
-    return (
-      <svg {...common}>
-        <polygon points="8,6 18,12 8,18" fill="currentColor" stroke="none" />
-      </svg>
-    )
-  }
-  if (kind === 'file') {
-    return (
-      <svg {...common}>
-        <path d="M7 3h7l5 5v13H7z" />
-        <path d="M14 3v5h5" />
-      </svg>
-    )
-  }
-  if (kind === 'idle') {
-    return (
-      <svg {...common}>
-        <path d="M4 18c2-6 14-6 16 0" />
-        <circle cx="12" cy="8" r="3" />
-      </svg>
-    )
-  }
-  if (kind === 'pulse') {
-    return (
-      <svg {...common}>
-        <path d="M3 12h4l2-5 4 10 2-5h6" />
-      </svg>
-    )
-  }
-  if (kind === 'hourglass') {
-    return (
-      <svg {...common}>
-        <path d="M6 4h12M6 20h12M8 4c0 4 8 4 8 8s-8 4-8 8M16 4c0 4-8 4-8 8s8 4 8 8" />
-      </svg>
-    )
-  }
-  return (
-    <svg {...common}>
-      <circle cx="12" cy="13" r="7" />
-      <path d="M12 10v4l2 1" />
-    </svg>
-  )
+  const common = { width: 18, height: 18 }
+  if (kind === 'play') return <IconPlay {...common} />
+  if (kind === 'file') return <IconFile {...common} />
+  if (kind === 'idle') return <IconUser {...common} />
+  if (kind === 'pulse') return <IconPulse {...common} />
+  if (kind === 'hourglass') return <IconHourglass {...common} />
+  return <IconClock {...common} />
 }
 
 export function TimerForm({ onClose }: { onClose: () => void }): JSX.Element {

@@ -25,7 +25,7 @@ import {
   stopManualTimer,
   stopTracker
 } from './tracker'
-import { createMainWindow, isQuitAllowed, setAllowQuit, showMainWindow } from './windows'
+import { createMainWindow, getMainWindow, isQuitAllowed, setAllowQuit, showMainWindow } from './windows'
 import {
   assignUnknown,
   assignWorkSession,
@@ -134,7 +134,8 @@ function registerIpc(): void {
       maxGapFillSec: Math.round(engine.maxGapFillMs / 1000),
       lockTimeoutMin: Math.round(engine.lockTimeoutMs / 60000),
       confidenceDecay: engine.confidenceDecay,
-      excludedProcesses: listExcluded()
+      excludedProcesses: listExcluded(),
+      theme: setting('ui_theme', 'light') === 'dark' ? 'dark' : 'light'
     }
   })
   ipcMain.handle(
@@ -154,6 +155,7 @@ function registerIpc(): void {
         maxGapFillSec?: number
         lockTimeoutMin?: number
         confidenceDecay?: number
+        theme?: 'light' | 'dark'
       }
     ) => {
       if (patch.pollIntervalMs !== undefined) {
@@ -194,6 +196,10 @@ function registerIpc(): void {
       }
       if (patch.confidenceDecay !== undefined) {
         setSetting('confidence_decay', String(Math.min(50, Math.max(0, patch.confidenceDecay))))
+      }
+      if (patch.theme === 'light' || patch.theme === 'dark') {
+        setSetting('ui_theme', patch.theme)
+        getMainWindow()?.setBackgroundColor(patch.theme === 'dark' ? '#0B1623' : '#F7F9FC')
       }
       broadcastChanged()
     }

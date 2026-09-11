@@ -9,6 +9,13 @@ export function formatDate(d: Date): string {
   return `${y}-${m}-${day}`
 }
 
+export function formatLongDate(d: Date = new Date()): string {
+  const cap = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1)
+  const weekday = cap(d.toLocaleDateString('it-IT', { weekday: 'long' }))
+  const month = cap(d.toLocaleDateString('it-IT', { month: 'long' }))
+  return `${weekday} ${d.getDate()} ${month} ${d.getFullYear()}`
+}
+
 export function dayBounds(date: string): { start: number; end: number } {
   const start = new Date(`${date}T00:00:00`).getTime()
   const end = new Date(`${date}T23:59:59.999`).getTime()
